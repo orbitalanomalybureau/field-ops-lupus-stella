@@ -36,7 +36,10 @@ const BUDGETS = [
     // only the "high" tier ever runs it. It rides in the lazy world chunk, so
     // the menu path is unaffected and phones pay nothing at runtime — but they
     // still download it. Lazy-loading the pass per tier would win that back.
-    maxKb: 520,
+    // Raised 520 -> 540 for the shooting wave: the full combat vertical (aim
+    // camera, hitscan, tracers, reticle, positional audio, death state,
+    // region cards, rest) measured +10 KB gz total.
+    maxKb: 540,
   },
   {
     name: "total CSS",

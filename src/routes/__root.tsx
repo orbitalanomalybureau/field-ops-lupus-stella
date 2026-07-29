@@ -1,7 +1,9 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { AuthProvider } from "@/lib/auth/provider";
 import appCss from "../styles.css?url";
+
+const FONT_HREF =
+  "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -30,10 +32,16 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: "stylesheet", href: appCss },
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
       {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap",
+        rel: "preconnect",
+        href: "https://fonts.gstatic.com",
+        crossOrigin: "anonymous",
       },
+      // Non-blocking webfont load: the terminal UI paints immediately on the
+      // system mono/sans fallbacks declared in styles.css, then upgrades.
+      // TODO(offline): self-host these as woff2 under public/fonts to drop the
+      // last third-party runtime request — see DEPLOY.md § Fonts.
       { rel: "manifest", href: "/manifest.webmanifest" },
       { rel: "icon", href: "/icons/icon-192.png", type: "image/png" },
       { rel: "apple-touch-icon", href: "/icons/icon-192.png" },
@@ -55,11 +63,21 @@ function RootDocument() {
     <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
+        <link
+          rel="stylesheet"
+          href={FONT_HREF}
+          media="print"
+          // Flip to `all` once loaded so the font never blocks first paint.
+          onLoad={(e) => {
+            (e.currentTarget as HTMLLinkElement).media = "all";
+          }}
+        />
+        <noscript>
+          <link rel="stylesheet" href={FONT_HREF} />
+        </noscript>
       </head>
       <body>
-        <AuthProvider>
-          <Outlet />
-        </AuthProvider>
+        <Outlet />
         <Scripts />
       </body>
     </html>

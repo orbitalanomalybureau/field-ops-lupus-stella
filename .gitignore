@@ -1,31 +1,22 @@
 node_modules
 .vercel
+.output
 dist
+
 .env
 .env.*
 !.env.example
-*.log
-/tmp
-.DS_Store
-screenshots/*.png
-.playwright
 
-# local / agent
+# logs & OS noise
+*.log
+.DS_Store
+
+# QA output — goldens under tests/goldens ARE tracked
 /tmp
 screenshots/
-*.png
-!public/icons/*.png
-.output
-.wxt
+test-results/
+playwright-report/
+.playwright
+
 # novel manuscripts (keep private / local)
 /attachments/
-# agent skill packs (not needed to run the app)
-.grok/
-# lock / status noise
-.node_modules.lock
-.grok/status
-# local QA dumps
-scripts/qa-*.mjs
-!scripts/browser-smoke.mjs
-!scripts/migrate.mjs
-!scripts/preview-thumbnail.mjs

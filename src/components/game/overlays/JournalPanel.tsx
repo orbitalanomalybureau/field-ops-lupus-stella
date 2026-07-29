@@ -151,7 +151,7 @@ export function JournalPanel() {
         <button
           type="button"
           onClick={copy}
-          className="min-h-11 rounded-md bg-primary px-4 text-sm font-semibold text-fg hover:bg-primary-glow"
+          className="min-h-11 rounded-md bg-primary px-4 text-sm font-semibold text-void hover:bg-primary-glow"
         >
           Copy log
         </button>

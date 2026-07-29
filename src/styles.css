@@ -7,7 +7,9 @@
   --color-surface-elevated: #1a2030;
   --color-fg: #e8ebe6;
   --color-muted: #8a9388;
-  --color-dim: #5a6358;
+  /* Raised from #5a6358 (3.1:1 on void — failed WCAG AA) to clear 4.5:1 on the
+     darkest surface it renders on. Functional help text uses this. */
+  --color-dim: #7c877a;
   --color-border: #2a3340;
   --color-primary: #c45c2a;
   --color-primary-glow: #e87a3a;

@@ -38,7 +38,7 @@ export function PauseMenu() {
         <button
           type="button"
           onClick={togglePause}
-          className="min-h-11 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-fg hover:bg-primary-glow"
+          className="min-h-11 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-void hover:bg-primary-glow"
         >
           Resume
         </button>

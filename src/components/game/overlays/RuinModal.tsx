@@ -48,7 +48,7 @@ export function RuinModal() {
           <button
             type="button"
             onClick={finishMission}
-            className="min-h-11 rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-fg hover:bg-primary-glow"
+            className="min-h-11 rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-void hover:bg-primary-glow"
           >
             Seal log & return
           </button>

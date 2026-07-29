@@ -245,9 +245,20 @@ function createPgStore(): FieldOpsStore {
       // Prune on access — no cron on serverless, and the tables stay tiny.
       await sql`delete from rtc_peers where last_seen < now() - interval '10 seconds'`;
       await sql`delete from rtc_signals where created_at < now() - interval '60 seconds'`;
-      const others = await sql<{ n: number }>`
-        select count(*) as n from rtc_peers where room = ${roomId} and peer <> ${peer}`;
-      if ((others[0]?.n ?? 0) < MAX_PEERS_PER_ROOM) {
+      const roomCounts = await sql<{ total: number; others: number }>`
+        select count(*) as total,
+               count(*) filter (where peer <> ${peer}) as others
+        from rtc_peers where room = ${roomId}`;
+      const total = roomCounts[0]?.total ?? 0;
+      const others = roomCounts[0]?.others ?? 0;
+      // Global room cap, parity with the memory store: a brand-new room past
+      // the cap is not registered — the caller degrades to solo until a slot
+      // frees (memory returns the same empty result).
+      if (total === 0) {
+        const rooms = await sql<{ n: number }>`select count(distinct room) as n from rtc_peers`;
+        if ((rooms[0]?.n ?? 0) >= MAX_ROOMS) return { peers: [], signals: [] };
+      }
+      if (others < MAX_PEERS_PER_ROOM) {
         await sql`
           insert into rtc_peers (room, peer, name, last_seen)
           values (${roomId}, ${peer}, ${name}, now())
@@ -267,6 +278,15 @@ function createPgStore(): FieldOpsStore {
       await sql`
         insert into rtc_signals (room, from_peer, to_peer, kind, payload)
         values (${roomId}, ${from}, ${to}, ${kind}, ${JSON.stringify(payload ?? null)})`;
+      // Parity with the memory store's per-room cap: keep only the newest
+      // MAX_SIGNALS_PER_ROOM ids for the room, trimming anything older.
+      await sql`
+        delete from rtc_signals
+        where room = ${roomId}
+          and id not in (
+            select id from rtc_signals where room = ${roomId}
+            order by id desc limit ${MAX_SIGNALS_PER_ROOM}
+          )`;
     },
 
     async rtcLeave(roomId, peer) {
@@ -353,12 +373,19 @@ export function allowRequest(
 
 /** Rate-limit key for a request. Read transiently, never stored. */
 export function clientKeyOf(request: Request): string {
+  // x-real-ip is set by the platform edge (Vercel) to the observed connecting
+  // IP and cannot be forged by the client — prefer it. X-Forwarded-For is
+  // client-controlled on the left; only the LAST token was appended by the
+  // trusted edge, so fall back to that, never split(",")[0].
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) return first;
+    const parts = forwarded.split(",");
+    const last = parts[parts.length - 1]?.trim();
+    if (last) return last;
   }
-  return request.headers.get("x-real-ip") ?? "local";
+  return "local";
 }
 
 /**

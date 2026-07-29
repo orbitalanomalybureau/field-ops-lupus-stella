@@ -100,7 +100,13 @@ function codexBodyOf(
   const stages = entry.stages;
   if (!stages || stages.length === 0)
     return { body: entry.body, stage: 0, total: 0 };
-  const idx = Math.min(Math.max(stage, 1), stages.length) - 1;
+  // Stage 0 is the base body — the first unlock. Only once codexStage reaches
+  // n does stages[n-1] show. Flooring the index at 0 leaked every entry's
+  // deepest, command-gated stratum on first contact (the collar cover-up, the
+  // chamber catalog) and made stage progression invisible.
+  if (stage < 1)
+    return { body: entry.body, stage: 0, total: stages.length };
+  const idx = Math.min(stage, stages.length) - 1;
   const current = stages[idx];
   return {
     body: current?.body ?? entry.body,
@@ -646,7 +652,9 @@ export function HUD() {
         </div>
       )}
 
-      <div className="pointer-events-none absolute bottom-24 left-3 right-3 sm:bottom-5 sm:left-4 sm:right-auto sm:w-72">
+      {/* right-20 on mobile leaves a gutter for the SPR/SCN/TAP action column
+          (bottom-right, ~48px + margin) so the vitals bars are not occluded. */}
+      <div className="pointer-events-none absolute bottom-24 left-3 right-20 sm:bottom-5 sm:left-4 sm:right-auto sm:w-72">
         {toast && (
           <p
             role="status"
@@ -681,11 +689,22 @@ export function HUD() {
             color="bg-warn"
           />
           <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[11px]">
-            <span className={combatEnabled ? "text-danger" : "text-muted"}>
-              {combatEnabled ? "ARMED" : "SAFE"}
+            {/* State carries a glyph and a border, not colour alone: ARMED vs
+                SAFE must read for colour-blind operatives, and TRACKED must
+                survive reduced-motion, which strips the pulse. */}
+            <span
+              className={`rounded-sm border px-1 ${
+                combatEnabled
+                  ? "border-danger text-danger"
+                  : "border-border text-muted"
+              }`}
+            >
+              {combatEnabled ? "◈ ARMED" : "○ SAFE"}
             </span>
             {trackedByFang && (
-              <span className="animate-pulse text-warn">TRACKED</span>
+              <span className="animate-pulse rounded-sm border border-warn px-1 text-warn">
+                ▲ TRACKED
+              </span>
             )}
             <span className="text-muted">
               {playerPos.x.toFixed(0)},{playerPos.z.toFixed(0)}

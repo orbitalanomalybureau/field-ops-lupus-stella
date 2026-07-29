@@ -93,7 +93,7 @@ build if the game uses a canon term that has no entry here.
 - **Status:** GAME-ASSERTED
 - **Game asserts:** Designed the modulation-collar retrofit. Tracks nightly collar drift in millihertz. Carver signed the retrofit off with him.
 - **Ceiling:** `book1`
-- **Phase 5 addition (GAME-ASSERTED, command branch):** He keeps two logs. Published drift is 2 mHz/night; true aggregate is 8 mHz and climbing since storm season; cascade lock-in fails past 40 mHz; the night Carver died the west collar read 43. His stated reason for the double ledger: "a colony that counts millihertz stops planting." These numbers are load-bearing in the `collars` codex stage 2 — if the books quantify drift differently, both the dialogue and the codex stage must move.
+- **Phase 5 addition (GAME-ASSERTED, command branch):** He keeps two logs. Published drift is 2 mHz/night, and the official log claims aggregate has never crossed 5; true aggregate is 8 mHz and climbing since storm season; cascade lock-in fails past 40 mHz; the night Carver died the west collar read 43. His stated reason for the double ledger: "a colony that counts millihertz stops planting." The published ceiling must read below the true 8 — that gap is the cover-up, and it is what makes the command-gated 8 and Carver's 43 land as the reveal. These numbers are load-bearing in the `collars` codex stage 2 — if the books quantify drift differently, both the dialogue and the codex stage must move.
 
 ### June Castillo — perimeter med
 - **Status:** GAME-ASSERTED · **Ceiling:** `book1`

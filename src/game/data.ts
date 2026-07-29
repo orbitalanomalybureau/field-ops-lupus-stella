@@ -482,11 +482,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
             effect: "take:collar-component:1|codex:collars:2|flag:collar-evidence",
           },
           {
-            label: "Three fern spores for a filter recalibration.",
-            if: "item:fern-spore>=3",
+            label: "A fern spore for a filter pass.",
+            if: "item:fern-spore>=1",
             once: "trade-thornhill-filter",
             next: "trade-filter",
-            effect: "take:fern-spore:3|upgrade:scan:0.15",
+            effect: "take:fern-spore:1|upgrade:scan:0.15",
           },
           { label: "I'll let you work.", next: "end" },
         ],
@@ -516,7 +516,7 @@ export const DIALOGUES: Record<string, DialogueTree> = {
       },
       threshold: {
         speaker: "Dr. Thornhill",
-        text: "Lock-in holds to forty millihertz aggregate. Past that the cascade window opens and stays open. We have never crossed thirty-one. Officially.",
+        text: "Lock-in holds to forty millihertz aggregate. Past that the cascade window opens and stays open. We have never crossed five. Officially.",
         choices: [
           { label: "Officially?", next: "official" },
           { label: "Keep it under forty, Doctor.", next: "end", effect: "codex:collars" },
@@ -627,10 +627,10 @@ export const DIALOGUES: Record<string, DialogueTree> = {
           { label: "I need a stim pack.", once: "stim-issued", next: "heal", effect: "heal" },
           { label: "Another stim.", if: "stim-issued", next: "rationed" },
           {
-            label: "Two fern spores for a dose.",
-            if: "item:fern-spore>=2",
+            label: "One fern spore for a dose.",
+            if: "item:fern-spore>=1",
             next: "spore-trade",
-            effect: "take:fern-spore:2|heal|flag:castillo-spores",
+            effect: "take:fern-spore:1|heal|flag:castillo-spores",
           },
           {
             label: "What do you make of these quills?",
@@ -684,14 +684,14 @@ export const DIALOGUES: Record<string, DialogueTree> = {
       },
       rationed: {
         speaker: "June Castillo",
-        text: "Stock's rationed; charity was a one-dose program. Bring me live fern spores — the antiseptic fraction titrates out clean and I can stretch it. Two spores, one dose. The forest can pay for what the forest does.",
+        text: "Stock's rationed; charity was a one-dose program. Bring me live fern spores — the antiseptic fraction titrates out clean and I can stretch it. One spore, one dose. The forest can pay for what the forest does.",
         choices: [
           { label: "I'll gather spores.", next: "end" },
           {
-            label: "Take two now.",
-            if: "item:fern-spore>=2",
+            label: "Take one now.",
+            if: "item:fern-spore>=1",
             next: "spore-trade",
-            effect: "take:fern-spore:2|heal|flag:castillo-spores",
+            effect: "take:fern-spore:1|heal|flag:castillo-spores",
           },
         ],
       },
@@ -850,11 +850,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
           { label: "How's the Verne hull?", next: "verne" },
           { label: "That hull plate by your bench —", if: "met-berger", next: "plate" },
           {
-            label: "Two prism shards for a servo tune.",
-            if: "item:prism-shard>=2",
+            label: "One prism shard for a servo tune.",
+            if: "item:prism-shard>=1",
             once: "trade-berger-servo",
             next: "trade-servo",
-            effect: "take:prism-shard:2|upgrade:stamina:0.1",
+            effect: "take:prism-shard:1|upgrade:stamina:0.1",
           },
           { label: "Keep an ear out.", next: "end" },
         ],

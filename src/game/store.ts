@@ -315,7 +315,9 @@ type GameStore = {
   /** Sets a story flag true. The "flag:" verb and choice setFlag/once gates. */
   raiseFlag: (name: string) => void;
   /** Applies HARVEST_RULES for a completed scan; safe to call with any id. */
-  harvestScan: (targetId: string) => void;
+  /** Returns false when a nightOnly harvest refuses (day): the caller must not
+   * consume the scan target, so the site stays scannable after dark. */
+  harvestScan: (targetId: string) => boolean;
   /** High-cadence caller: sets state only; autosave flushes it to the blob. */
   saveCreatureMemory: (records: CreatureRecord[]) => void;
   setScanner: (v: boolean) => void;
@@ -948,8 +950,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
   saveCreatureMemory: (creatureMemory) => set({ creatureMemory }),
 
   setScanner: (scannerActive) => set({ scannerActive }),
-  setScanProgress: (scanProgress) =>
-    set({ scanProgress: Math.max(0, Math.min(1, scanProgress)) }),
+  setScanProgress: (scanProgress) => {
+    const v = Math.max(0, Math.min(1, scanProgress));
+    // Called every frame the scanner is up; a set() at the same value still
+    // notifies every subscriber. Bail when unchanged past display resolution.
+    if (Math.abs(v - get().scanProgress) < 0.005) return;
+    set({ scanProgress: v });
+  },
 
   markScanned: (id) => {
     if (get().scannedIds.includes(id)) return;
@@ -963,12 +970,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   harvestScan: (targetId) => {
     const rule = HARVEST_RULES[targetId];
-    if (!rule) return;
+    // No harvest rule for this target: nothing to give, but the scan itself
+    // is still valid — report success so the caller records it as scanned.
+    if (!rule) return true;
     if (rule.nightOnly && !isNight(get().timeOfDay)) {
       get().pushMessage("SPECIMEN — spores inert by day; sample after dark");
-      return;
+      return false;
     }
     get().grantItem(rule.item);
+    return true;
   },
 
   lootCache: (id) => {
@@ -983,9 +993,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().persist();
   },
 
-  setPlayerPos: (x, y, z) => set({ playerPos: { x, y, z } }),
-  setPlayerYaw: (playerYaw) => set({ playerYaw }),
-  setPlayerMotion: (playerSpeed, animState) => set({ playerSpeed, animState }),
+  // The controller writes these every frame. Skip the set() — and its
+  // subscriber notification — when the value has not moved past what any
+  // readout can show, so a stationary operative stops re-rendering the HUD and
+  // the ~1 cm/frame that consumers round away never churns React.
+  setPlayerPos: (x, y, z) => {
+    const p = get().playerPos;
+    if (
+      Math.abs(p.x - x) < 0.05 &&
+      Math.abs(p.y - y) < 0.05 &&
+      Math.abs(p.z - z) < 0.05
+    )
+      return;
+    set({ playerPos: { x, y, z } });
+  },
+  setPlayerYaw: (playerYaw) => {
+    if (Math.abs(get().playerYaw - playerYaw) < 0.01) return;
+    set({ playerYaw });
+  },
+  setPlayerMotion: (playerSpeed, animState) => {
+    if (get().animState === animState && Math.abs(get().playerSpeed - playerSpeed) < 0.1)
+      return;
+    set({ playerSpeed, animState });
+  },
 
   samplePath: (x, z) => {
     const now = performance.now();
@@ -1002,7 +1032,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ trackedByFang });
   },
   setInteract: (interact) => set({ interact }),
-  setCompass: (compassBearing) => set({ compassBearing }),
+  setCompass: (compassBearing) => {
+    if (Math.abs(get().compassBearing - compassBearing) < 0.5) return;
+    set({ compassBearing });
+  },
   setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
 
   setWeather: (weather, intensity = 0.5) => {
@@ -1288,7 +1321,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (spawn && SPAWNS[spawn]) set({ pendingSpawn: spawn });
     const op = params.get("operative") as CharacterId | null;
     if (op && CHARACTERS.some((c) => c.id === op)) {
-      set({ characterId: op, phase: "briefing" });
+      // Seed cmd-access exactly as selectCharacter does — a deep-linked
+      // command operative must still get their command dialogue branches.
+      const cmd = (CHARACTERS.find((c) => c.id === op)?.commandBonus ?? 1) > 1;
+      set({
+        characterId: op,
+        phase: "briefing",
+        flags: { ...get().flags, "cmd-access": cmd },
+      });
     }
     // QA only: `tod` and `wx` pin the world clock and the sky so golden
     // screenshots are reproducible. Inert unless a test passes them.

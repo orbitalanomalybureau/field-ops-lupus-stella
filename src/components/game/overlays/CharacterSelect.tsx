@@ -31,6 +31,7 @@ function lastPosition(
 export function CharacterSelect() {
   const selectCharacter = useGameStore((s) => s.selectCharacter);
   const resumeMission = useGameStore((s) => s.resumeMission);
+  const reset = useGameStore((s) => s.reset);
   const embed = useGameStore((s) => s.embedMode);
   const spoiler = useGameStore((s) => s.spoilerCeiling);
   const setSpoiler = useGameStore((s) => s.setSpoilerCeiling);
@@ -129,7 +130,13 @@ export function CharacterSelect() {
             <button
               key={c.id}
               type="button"
-              onClick={() => selectCharacter(c.id as CharacterId)}
+              onClick={() => {
+                // A fresh operative from this grid starts a clean run; without
+                // reset() the existing save's progress would ride along under
+                // the new characterId. Only the RESUME card continues a run.
+                if (hasSave) reset();
+                selectCharacter(c.id as CharacterId);
+              }}
               className="group panel-glass flex flex-col rounded-lg p-5 text-left transition hover:border-accent/50 hover:bg-surface-elevated active:scale-[0.99]"
             >
               <span

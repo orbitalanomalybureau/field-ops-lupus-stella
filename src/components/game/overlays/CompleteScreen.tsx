@@ -198,7 +198,7 @@ export function CompleteScreen() {
             className={`min-h-11 rounded-md px-5 py-2.5 font-semibold ${
               armed
                 ? "border border-danger bg-danger/15 font-mono text-[11px] tracking-wide text-danger"
-                : "bg-primary text-sm text-fg hover:bg-primary-glow"
+                : "bg-primary text-sm text-void hover:bg-primary-glow"
             }`}
           >
             {armed ? "CONFIRM — ERASES FIELD LOG" : "New operative"}

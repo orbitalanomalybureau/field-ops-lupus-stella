@@ -56,9 +56,9 @@ export function DialogueModal() {
     <TerminalDialog
       title={`Comms — ${npc.name}`}
       onClose={close}
-      className="max-w-lg"
+      className="flex max-h-[85vh] max-w-lg flex-col"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex shrink-0 items-start justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] tracking-[0.25em] text-accent">
             COMMS · LOCAL
@@ -75,14 +75,17 @@ export function DialogueModal() {
         </button>
       </div>
 
-      <p className="mt-4 text-sm leading-relaxed text-muted">{node.text}</p>
+      {/* The line and its choices scroll together: a long node on a short
+          landscape phone must never push the choices off-screen. */}
+      <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+        <p className="text-sm leading-relaxed text-muted">{node.text}</p>
 
-      <div className="mt-5 space-y-2">
+        <div className="mt-5 space-y-2">
         {isEnd ? (
           <button
             type="button"
             onClick={close}
-            className="min-h-11 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-fg hover:bg-primary-glow"
+            className="min-h-11 w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-void hover:bg-primary-glow"
           >
             End conversation
           </button>
@@ -104,6 +107,7 @@ export function DialogueModal() {
             </button>
           ))
         )}
+        </div>
       </div>
     </TerminalDialog>
   );

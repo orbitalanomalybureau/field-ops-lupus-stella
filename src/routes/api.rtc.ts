@@ -17,7 +17,13 @@
  */
 
 import { createFileRoute } from "@tanstack/react-router";
-import { getStore, sanitizeText, type SignalKind } from "@/lib/serverState";
+import {
+  allowRequest,
+  clientKeyOf,
+  getStore,
+  sanitizeText,
+  type SignalKind,
+} from "@/lib/serverState";
 
 const TOKEN_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const MAX_NAME_LENGTH = 32;
@@ -54,6 +60,14 @@ export const Route = createFileRoute("/api/rtc")({
         if (!room || !peer || !Number.isSafeInteger(since) || since < 0) {
           return statusResponse(400);
         }
+        // p2p.ts fast-polls at 400ms (~2.5 req/s), idle at 2000ms; a burst of
+        // 10 refilling at 4/s clears presence without capping a healthy client.
+        // 503 (not 429) on throttle: pollOnce() throws on any non-ok BEFORE
+        // reading the body, so the client retries the SAME `since` cursor with
+        // no roster/signal desync.
+        if (!allowRequest("rtc-poll", clientKeyOf(request), 10, 4)) {
+          return statusResponse(503);
+        }
         try {
           return jsonResponse(await getStore().rtcPoll(room, peer, name, since));
         } catch {
@@ -81,6 +95,12 @@ export const Route = createFileRoute("/api/rtc")({
             const to = asToken(body.to);
             if (!room || !from || !to || !isSignalKind(body.kind)) return statusResponse(400);
             if (body.payload === undefined) return statusResponse(400);
+            // Tight bucket: signaling is bursty (offer/answer + ICE per pair)
+            // but one IP has no legitimate reason to exceed this. 429 is non-ok,
+            // so postSignal() retries with backoff, letting the bucket refill.
+            if (!allowRequest("rtc-signal", clientKeyOf(request), 40, 15)) {
+              return statusResponse(429);
+            }
             await getStore().rtcSignal(room, from, to, body.kind, body.payload);
             return statusResponse(204);
           }
@@ -88,6 +108,11 @@ export const Route = createFileRoute("/api/rtc")({
             const room = asToken(body.room);
             const peer = asToken(body.peer);
             if (!room || !peer) return statusResponse(400);
+            // Leave fires once per teardown; a low cap blunts anyone spamming
+            // the delete-broadcast. close() ignores the response, so 429 is safe.
+            if (!allowRequest("rtc-leave", clientKeyOf(request), 10, 2)) {
+              return statusResponse(429);
+            }
             await getStore().rtcLeave(room, peer);
             return statusResponse(204);
           }

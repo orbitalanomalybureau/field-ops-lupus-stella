@@ -448,7 +448,7 @@ export function KeybindOverlay() {
       <button
         type="button"
         onClick={close}
-        className="mt-5 min-h-11 w-full rounded-md bg-primary text-sm font-semibold text-fg hover:bg-primary-glow"
+        className="mt-5 min-h-11 w-full rounded-md bg-primary text-sm font-semibold text-void hover:bg-primary-glow"
       >
         Back to the survey
       </button>

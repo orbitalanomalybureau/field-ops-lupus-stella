@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { TerminalDialog } from "@/components/ui/TerminalDialog";
-import { MISSION_BOARD } from "@/game/data";
+import { MISSION_BOARD, SPAWNS } from "@/game/data";
 import {
   DEFAULT_KEYMAP,
   getKeymap,
@@ -116,6 +116,10 @@ export function SettingsPanel() {
   const qualityAuto = useGameStore((s) => s.qualityAuto);
   const setQuality = useGameStore((s) => s.setQuality);
   const setSpawn = useGameStore((s) => s.setPendingSpawn);
+  const setPlayerPos = useGameStore((s) => s.setPlayerPos);
+  const setPlayerYaw = useGameStore((s) => s.setPlayerYaw);
+  // Settings overlays the run; prevPhase is the world phase Resume returns to.
+  const prevPhase = useGameStore((s) => s.prevPhase);
   const pushMessage = useGameStore((s) => s.pushMessage);
   const character = useGameStore((s) => s.getCharacter());
 
@@ -192,12 +196,12 @@ export function SettingsPanel() {
 
       {character && (
         <div className="mt-4 rounded-md border border-border bg-surface/40 p-3">
-          <p className="font-mono text-[10px] text-dim">ACTIVE LOADOUT</p>
+          <p className="font-mono text-[10px] text-muted">ACTIVE LOADOUT</p>
           <p className="mt-1 text-sm font-semibold text-fg">
             {character.callsign}
           </p>
           <p className="mt-1 text-xs text-muted">{character.loadout}</p>
-          <p className="mt-2 font-mono text-[10px] text-dim">
+          <p className="mt-2 font-mono text-[10px] text-muted">
             SPD {character.speed} · STM {character.stamina} · STL{" "}
             {character.stealth} · SCAN×{character.scanBonus} · CBT×
             {character.combatBonus}
@@ -222,12 +226,12 @@ export function SettingsPanel() {
       </label>
       {/* Outside the label so the select's accessible name stays the heading
           rather than the whole spec sheet. */}
-      <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+      <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">
         {qualityAuto ? `AUTO · ${quality.toUpperCase()} · ` : ""}
         {describeTier(quality)}
       </p>
       {qualityAuto && (
-        <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+        <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">
           Auto may step down once if frames run short. Choosing a tier makes it
           final.
         </p>
@@ -305,7 +309,7 @@ export function SettingsPanel() {
         />
         <span className="text-sm text-muted">Reduced motion</span>
       </label>
-      <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+      <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">
         Calms interface animation, weather particles and screen effects. This is
         an accessibility setting — use the graphics preset for performance.
       </p>
@@ -325,7 +329,7 @@ export function SettingsPanel() {
             SURVEY MESH — show other operatives' survey ghosts
           </span>
         </label>
-        <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+        <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">
           Silent holograms of other readers surveying right now. Callsign and
           position only — no chat, no names, nothing stored. Off is total:
           nothing sent, nothing shown.
@@ -350,7 +354,7 @@ export function SettingsPanel() {
             RESTORE DEFAULTS
           </button>
         </div>
-        <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+        <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">
           Select a row, then press a key. Esc cancels the capture.
         </p>
         <ul className="mt-2 space-y-1">
@@ -388,29 +392,46 @@ export function SettingsPanel() {
                 type="button"
                 className="min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-sm text-fg hover:border-accent/40"
                 onClick={() => {
-                  if (m.spawn) {
+                  if (!m.spawn) return;
+                  const coords = SPAWNS[m.spawn];
+                  // Fast travel now, not "next deploy": pendingSpawn is wiped by
+                  // reset() and every entry point is mid-run, so staging it
+                  // never fired. Teleport when a run is live under the panel.
+                  const live = prevPhase === "playing" || prevPhase === "ruins";
+                  if (live) {
+                    setPlayerPos(coords.x, 0, coords.z);
+                    setPlayerYaw(coords.yaw);
+                    setSpawn(null);
+                    // The ruin chamber is its own scene; surfacing the operative
+                    // on fast travel keeps Resume in the open world.
+                    if (prevPhase === "ruins") {
+                      useGameStore.setState({ prevPhase: "playing" });
+                    }
+                    pushMessage(`FAST TRAVEL — ${m.title}`);
+                  } else {
                     setSpawn(m.spawn as SpawnPoint);
-                    pushMessage(`BOARD — ${m.title} marked for next deploy`);
+                    pushMessage(`BOARD — ${m.title} staged for deploy`);
                   }
                 }}
               >
                 <span className="font-medium">{m.title}</span>
-                <span className="mt-0.5 block text-xs text-dim">
+                <span className="mt-0.5 block text-xs text-muted">
                   {m.detail}
                 </span>
               </button>
             </li>
           ))}
         </ul>
-        <p className="mt-2 font-mono text-[10px] text-dim">
-          Marks apply on next deploy (reset → redeploy) or deep-link spawn.
+        <p className="mt-2 font-mono text-[10px] text-muted">
+          Fast travel drops the operative at the marked site now — mid-survey
+          only. Off-run marks fall back to the next deploy.
         </p>
       </div>
 
       <button
         type="button"
         onClick={close}
-        className="mt-6 min-h-11 w-full rounded-md bg-primary text-sm font-semibold text-fg hover:bg-primary-glow"
+        className="mt-6 min-h-11 w-full rounded-md bg-primary text-sm font-semibold text-void hover:bg-primary-glow"
       >
         Resume
       </button>

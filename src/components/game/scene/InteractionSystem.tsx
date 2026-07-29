@@ -42,6 +42,9 @@ export function InteractionSystem() {
   const scanHold = useRef(0);
   const nearScanId = useRef<string | null>(null);
   const pendingAction = useRef<(() => void) | null>(null);
+  // Last prompt written to the store, so an unchanged prompt does not push a
+  // fresh object every frame and re-render the HUD off movement alone.
+  const lastPrompt = useRef<string | null>(null);
 
   useFrame((_, delta) => {
     const store = useGameStore.getState();
@@ -185,10 +188,19 @@ export function InteractionSystem() {
 
     if (best) {
       const b: Cand = best;
-      store.setInteract({ label: b.label, sub: b.sub, dist: b.dist });
+      // Distance rounded to the metre: the readout shows integers, so sub-metre
+      // drift must not count as a change and re-render the prompt every frame.
+      const key = `${b.label}|${b.sub ?? ""}|${Math.round(b.dist)}`;
+      if (key !== lastPrompt.current) {
+        lastPrompt.current = key;
+        store.setInteract({ label: b.label, sub: b.sub, dist: b.dist });
+      }
       pendingAction.current = b.dist < b.radius ? b.action : null;
     } else {
-      store.setInteract(null);
+      if (lastPrompt.current !== null) {
+        lastPrompt.current = null;
+        store.setInteract(null);
+      }
       pendingAction.current = null;
     }
 
@@ -219,16 +231,19 @@ export function InteractionSystem() {
         scanHold.current += d;
         store.setScanProgress(Math.min(1, scanHold.current / need));
         if (scanHold.current >= need) {
-          store.markScanned(nearest.id);
-          if (nearest.codexId) store.unlockCodex(nearest.codexId);
-          const revealed = SCAN_REVEALS[nearest.id];
-          if (revealed) store.revealObjective(revealed);
-          store.pushMessage(`SCAN COMPLETE — ${nearest.title}`);
-          // The store decides what a scan yields — spores off the night ferns,
-          // a component off the collar, a shard off the herd. Ticker order:
-          // the specimen line lands above the completed-scan line.
-          store.harvestScan(nearest.id);
-          getAudio().pulseInteract();
+          // Harvest FIRST and gate consumption on it: a nightOnly harvest
+          // (the ferns) refuses by day and returns false, and the target must
+          // stay scannable so the operative can come back after dark — marking
+          // it scanned here would burn the only sample for nothing.
+          const harvested = store.harvestScan(nearest.id);
+          if (harvested) {
+            store.markScanned(nearest.id);
+            if (nearest.codexId) store.unlockCodex(nearest.codexId);
+            const revealed = SCAN_REVEALS[nearest.id];
+            if (revealed) store.revealObjective(revealed);
+            store.pushMessage(`SCAN COMPLETE — ${nearest.title}`);
+            getAudio().pulseInteract();
+          }
           scanHold.current = 0;
           nearScanId.current = null;
         }

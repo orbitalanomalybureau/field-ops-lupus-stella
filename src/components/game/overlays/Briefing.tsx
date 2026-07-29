@@ -5,7 +5,6 @@ import { getAudio } from "@/game/audio";
 export function Briefing() {
   const character = useGameStore((s) => s.getCharacter());
   const startMission = useGameStore((s) => s.startMission);
-  const reset = useGameStore((s) => s.reset);
   const embed = useGameStore((s) => s.embedMode);
   const spoiler = useGameStore((s) => s.spoilerCeiling);
   const pending = useGameStore((s) => s.pendingSpawn);
@@ -83,13 +82,18 @@ export function Briefing() {
               getAudio().resume();
               startMission();
             }}
-            className="min-h-11 rounded-md bg-primary px-5 py-2.5 text-sm font-semibold text-fg transition hover:bg-primary-glow active:scale-[0.98]"
+            className="min-h-11 rounded-md bg-primary px-5 py-2.5 text-sm font-semibold text-void transition hover:bg-primary-glow active:scale-[0.98]"
           >
             Deploy to surface
           </button>
           <button
             type="button"
-            onClick={reset}
+            onClick={() =>
+              // Non-destructive: drop back to the select screen without wiping
+              // the save. Re-picking recomputes cmd-access, and select owns its
+              // own RESUME / fresh-start controls.
+              useGameStore.setState({ phase: "select", characterId: null })
+            }
             className="min-h-11 rounded-md border border-border px-5 py-2.5 text-sm text-muted hover:border-muted hover:text-fg"
           >
             Change operative

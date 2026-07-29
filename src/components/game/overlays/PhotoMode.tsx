@@ -183,7 +183,7 @@ export function PhotoMode() {
           type="button"
           onClick={capture}
           disabled={busy}
-          className="min-h-11 rounded-md bg-primary px-4 font-mono text-xs font-semibold tracking-widest text-fg hover:bg-primary-glow disabled:opacity-50"
+          className="min-h-11 rounded-md bg-primary px-4 font-mono text-xs font-semibold tracking-widest text-void hover:bg-primary-glow disabled:opacity-50"
         >
           CAPTURE
         </button>

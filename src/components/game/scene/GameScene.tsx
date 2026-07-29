@@ -11,6 +11,7 @@ import { SkyDome } from "./SkyDome";
 import { WeatherSystem } from "./WeatherSystem";
 import { Ridge7 } from "./Ridge7";
 import { NPCs } from "./NPCs";
+import { GhostOperatives } from "./GhostOperatives";
 import { KaguyahimeCoast } from "./KaguyahimeCoast";
 import { CommandDomeInterior, DomeHatchMarker } from "./CommandDome";
 import { PostFX } from "./PostFX";
@@ -46,6 +47,9 @@ export function GameScene() {
       <Ridge7 />
       <KaguyahimeCoast />
       <NPCs />
+      {/* Other current readers as silent survey ghosts; renders nothing when
+          presence is off, blocked, QA-pinned, or simply empty. */}
+      <GhostOperatives />
       <Creatures />
       <WorldPOIs />
       <Ruins position={WORLD.ruinPos} />

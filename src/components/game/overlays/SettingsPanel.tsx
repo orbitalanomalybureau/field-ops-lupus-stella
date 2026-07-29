@@ -110,6 +110,8 @@ export function SettingsPanel() {
   const setVol = useGameStore((s) => s.setMasterVolume);
   const reduced = useGameStore((s) => s.reducedMotion);
   const setReduced = useGameStore((s) => s.setReducedMotion);
+  const presence = useGameStore((s) => s.presenceEnabled);
+  const setPresence = useGameStore((s) => s.setPresenceEnabled);
   const quality = useGameStore((s) => s.quality);
   const qualityAuto = useGameStore((s) => s.qualityAuto);
   const setQuality = useGameStore((s) => s.setQuality);
@@ -307,6 +309,28 @@ export function SettingsPanel() {
         Calms interface animation, weather particles and screen effects. This is
         an accessibility setting — use the graphics preset for performance.
       </p>
+
+      <div className="mt-6">
+        <p className="font-mono text-[10px] tracking-widest text-muted">
+          PRESENCE
+        </p>
+        <label className="mt-2 flex min-h-11 cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            checked={presence}
+            onChange={(e) => setPresence(e.target.checked)}
+            className="h-4 w-4"
+          />
+          <span className="text-sm text-muted">
+            SURVEY MESH — show other operatives' survey ghosts
+          </span>
+        </label>
+        <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+          Silent holograms of other readers surveying right now. Callsign and
+          position only — no chat, no names, nothing stored. Off is total:
+          nothing sent, nothing shown.
+        </p>
+      </div>
 
       <div className="mt-6">
         <div className="flex items-center justify-between gap-3">

@@ -13,6 +13,9 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as EmbedRouteImport } from './routes/embed'
 import { Route as OfflineRouteImport } from './routes/offline'
 import { Route as TerminalRouteImport } from './routes/terminal'
+import { Route as ApiEventsRouteImport } from './routes/api.events'
+import { Route as ApiProtocolRouteImport } from './routes/api.protocol'
+import { Route as ApiRtcRouteImport } from './routes/api.rtc'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +37,39 @@ const TerminalRoute = TerminalRouteImport.update({
   path: '/terminal',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiEventsRoute = ApiEventsRouteImport.update({
+  id: '/api/events',
+  path: '/api/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiProtocolRoute = ApiProtocolRouteImport.update({
+  id: '/api/protocol',
+  path: '/api/protocol',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRtcRoute = ApiRtcRouteImport.update({
+  id: '/api/rtc',
+  path: '/api/rtc',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/embed': typeof EmbedRoute
   '/offline': typeof OfflineRoute
   '/terminal': typeof TerminalRoute
+  '/api/events': typeof ApiEventsRoute
+  '/api/protocol': typeof ApiProtocolRoute
+  '/api/rtc': typeof ApiRtcRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/embed': typeof EmbedRoute
   '/offline': typeof OfflineRoute
   '/terminal': typeof TerminalRoute
+  '/api/events': typeof ApiEventsRoute
+  '/api/protocol': typeof ApiProtocolRoute
+  '/api/rtc': typeof ApiRtcRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +77,38 @@ export interface FileRoutesById {
   '/embed': typeof EmbedRoute
   '/offline': typeof OfflineRoute
   '/terminal': typeof TerminalRoute
+  '/api/events': typeof ApiEventsRoute
+  '/api/protocol': typeof ApiProtocolRoute
+  '/api/rtc': typeof ApiRtcRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/embed' | '/offline' | '/terminal'
+  fullPaths:
+    | '/'
+    | '/embed'
+    | '/offline'
+    | '/terminal'
+    | '/api/events'
+    | '/api/protocol'
+    | '/api/rtc'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/embed' | '/offline' | '/terminal'
-  id: '__root__' | '/' | '/embed' | '/offline' | '/terminal'
+  to:
+    | '/'
+    | '/embed'
+    | '/offline'
+    | '/terminal'
+    | '/api/events'
+    | '/api/protocol'
+    | '/api/rtc'
+  id:
+    | '__root__'
+    | '/'
+    | '/embed'
+    | '/offline'
+    | '/terminal'
+    | '/api/events'
+    | '/api/protocol'
+    | '/api/rtc'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +116,9 @@ export interface RootRouteChildren {
   EmbedRoute: typeof EmbedRoute
   OfflineRoute: typeof OfflineRoute
   TerminalRoute: typeof TerminalRoute
+  ApiEventsRoute: typeof ApiEventsRoute
+  ApiProtocolRoute: typeof ApiProtocolRoute
+  ApiRtcRoute: typeof ApiRtcRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +151,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TerminalRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/events': {
+      id: '/api/events'
+      path: '/api/events'
+      fullPath: '/api/events'
+      preLoaderRoute: typeof ApiEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/protocol': {
+      id: '/api/protocol'
+      path: '/api/protocol'
+      fullPath: '/api/protocol'
+      preLoaderRoute: typeof ApiProtocolRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/rtc': {
+      id: '/api/rtc'
+      path: '/api/rtc'
+      fullPath: '/api/rtc'
+      preLoaderRoute: typeof ApiRtcRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +180,9 @@ const rootRouteChildren: RootRouteChildren = {
   EmbedRoute: EmbedRoute,
   OfflineRoute: OfflineRoute,
   TerminalRoute: TerminalRoute,
+  ApiEventsRoute: ApiEventsRoute,
+  ApiProtocolRoute: ApiProtocolRoute,
+  ApiRtcRoute: ApiRtcRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

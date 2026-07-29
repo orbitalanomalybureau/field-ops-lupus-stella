@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  CHAPTER_SCENES,
   CHARACTERS,
   DIALOGUES,
   INITIAL_CODEX,
@@ -36,7 +37,7 @@ import type {
 const SAVE_KEY = "lupus-fieldops-v4";
 
 /** Bumped when the blob shape changes. Older blobs still load, best-effort. */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /** Keys from abandoned save schemas, swept on boot so they stop rotting. */
 const LEGACY_SAVE_KEYS = [
@@ -194,6 +195,7 @@ type SaveBlob = {
   journal?: JournalEntry[];
   masterVolume?: number;
   reducedMotion?: boolean;
+  presenceEnabled?: boolean;
   quality?: QualityTier;
   qualityAuto?: boolean;
   playerPos?: { x: number; y: number; z: number };
@@ -263,9 +265,17 @@ type GameStore = {
   photoMode: boolean;
   insideDome: boolean;
   pendingSpawn: SpawnPoint | null;
+  /** One-shot arrival line staged by a ?chapter deep link; shown on deploy. */
+  pendingDeployNote: string | null;
   dynamicMarkers: WorldMarker[];
   hasSave: boolean;
   reducedMotion: boolean;
+  /**
+   * Survey-mesh presence opt-in (persisted, default true). When false the
+   * multiplayer layer must neither join a room nor transmit — the ghosts
+   * system reads this before touching the network. Off is total.
+   */
+  presenceEnabled: boolean;
   /**
    * Graphics tier. A device preference, persisted with the save blob and read
    * by GameCanvas (dpr, shadows, far plane), PostFX (which passes run) and by
@@ -350,6 +360,7 @@ type GameStore = {
   applyDeepLink: (params: URLSearchParams) => void;
   exportJournal: () => string;
   setReducedMotion: (v: boolean) => void;
+  setPresenceEnabled: (v: boolean) => void;
   setQuality: (tier: QualityTier | "auto") => void;
   autoTuneQuality: () => void;
   initPreferences: () => void;
@@ -651,9 +662,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   photoMode: false,
   insideDome: false,
   pendingSpawn: null,
+  pendingDeployNote: null,
   dynamicMarkers: [],
   hasSave: false,
   reducedMotion: false,
+  presenceEnabled: true,
   // Static rather than `detectTier()` so the module has the same value on the
   // server and on the first client render; initPreferences seeds the real one.
   quality: "medium",
@@ -676,6 +689,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
   setReducedMotion: (reducedMotion) => {
     set({ reducedMotion });
+    get().persist();
+  },
+
+  setPresenceEnabled: (presenceEnabled) => {
+    if (get().presenceEnabled === presenceEnabled) return;
+    set({ presenceEnabled });
+    get().pushMessage(
+      presenceEnabled
+        ? "SURVEY MESH — peer ghosts visible"
+        : "SURVEY MESH — running dark",
+    );
     get().persist();
   },
 
@@ -747,8 +771,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   startMission: () => {
     const spawn = get().consumeSpawn();
+    const note = get().pendingDeployNote;
     set({
       phase: "playing",
+      pendingDeployNote: null,
       messages: [
         "FIELD OPS ONLINE — SURVEY MESH LOADED",
         "J journal · P photo · Esc menu · deep recon active",
@@ -760,6 +786,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         : { x: 0, y: 0, z: 40 },
       playerYaw: spawn?.yaw ?? Math.PI,
     });
+    // Pushed after the boilerplate so a chapter link's arrival line is the
+    // newest ticker entry — the toast the reader deployed for.
+    if (note) get().pushMessage(note);
     beginPlay(get);
   },
 
@@ -1239,6 +1268,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
         dynamicMarkers: ceilingFilter(get().dynamicMarkers, spoiler),
       });
     }
+    // Chapter scene preset — the novel site's per-chapter "Visit this scene"
+    // link. Handled before ?spawn and the QA pins (?tod / ?wx) so anything
+    // explicit in the same URL still wins over the preset.
+    const chapterParam = params.get("chapter");
+    const scene = chapterParam ? CHAPTER_SCENES[chapterParam] : undefined;
+    if (scene) {
+      // The ceiling only ever rises toward the preset: a late-book chapter
+      // page may open early Book II, but a chapter link never lowers a
+      // ceiling the reader (or their save) already chose.
+      if (scene.ceiling === "book2early" && get().spoilerCeiling === "book1") {
+        set({ spoilerCeiling: "book2early" });
+      }
+      set({ pendingSpawn: scene.spawn, pendingDeployNote: scene.note });
+      get().setTimeOfDay(scene.tod);
+      get().setWeather(scene.wx);
+    }
     const spawn = params.get("spawn") as SpawnPoint | null;
     if (spawn && SPAWNS[spawn]) set({ pendingSpawn: spawn });
     const op = params.get("operative") as CharacterId | null;
@@ -1306,6 +1351,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   reset: () => {
+    // Device and privacy preferences — masterVolume, reducedMotion, quality,
+    // spoilerCeiling, presenceEnabled — deliberately survive a run wipe: "New
+    // operative" must never quietly re-enable presence for a reader who
+    // opted out.
     set({
       phase: "select",
       prevPhase: null,
@@ -1355,6 +1404,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       photoMode: false,
       insideDome: false,
       pendingSpawn: null,
+      pendingDeployNote: null,
       dynamicMarkers: [],
       hasSave: false,
     });
@@ -1403,6 +1453,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           journal: s.journal,
           masterVolume: s.masterVolume,
           reducedMotion: s.reducedMotion,
+          presenceEnabled: s.presenceEnabled,
           quality: s.quality,
           qualityAuto: s.qualityAuto,
           playerPos: s.playerPos,
@@ -1483,6 +1534,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         journal: data.journal ?? [],
         masterVolume: data.masterVolume ?? 0.7,
         reducedMotion: data.reducedMotion ?? get().reducedMotion,
+        // Absent on pre-v6 blobs; presence defaults ON, opt-out is explicit.
+        presenceEnabled: data.presenceEnabled ?? true,
         // A demoted auto tier is restored as-is rather than re-detected: the
         // sampler already knows more about this device than the hints do.
         quality: isQualityTier(data.quality) ? data.quality : get().quality,

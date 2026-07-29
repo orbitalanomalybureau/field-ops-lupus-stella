@@ -24,8 +24,74 @@ alongside this document.
 | `spoiler` | `book1` \| `book2early` | Spoiler ceiling. **Defaults to `book1`** — never show a first-book reader Book II content. |
 | `operative` | `theo` \| `marine` \| `survey` | Preselects the operative and jumps to the briefing. |
 | `spawn` | `south-gate` \| `colony` \| `ridge7` \| `ruins` \| `coast` \| `treeline` | Where the operative deploys. |
-| `chapter` | `1`…`N` | Curated scene preset: spawn, ceiling, time of day, weather, and highlighted objective for that chapter. The intended per-chapter "Visit this scene" hook. |
+| `chapter` | `1`…`16` | Curated scene preset: spawn, spoiler ceiling (raise-only), time of day, weather, and an arrival note for that chapter. See [Chapter scene links](#chapter-scene-links). |
 | `auto` | `1` | Deploys immediately if an operative is already chosen. Audio still needs a user gesture. |
+
+QA pins (`?tod=0..1`, `?wx=clear|haze|rain|storm`) and `?quality=low|medium|high`
+also exist and behave exactly as before; they win over anything a `chapter`
+preset sets, as does an explicit `?spawn`.
+
+## Chapter scene links
+
+`?chapter=N` (or `chapter` on a `fieldops:deeplink` message) is the per-chapter
+**"Visit this scene"** hook: the reader lands where the chapter happens, at its
+hour, under its weather, with a one-line arrival note in the ticker. The preset
+only ever **raises** the spoiler ceiling toward the chapter's level — a link
+from the chapter-16 page proves the reader got there — and never lowers a
+ceiling the reader already chose. Unknown chapter values are ignored.
+
+| Chapter | Scene | Hour | Weather | Ceiling |
+|---|---|---|---|---|
+| 1 | Colony | amber dawn | clear | `book1` |
+| 2 | Colony | day | haze | `book1` |
+| 3 | Colony | midday | clear | `book1` |
+| 4 | Colony generators | dusk | haze | `book1` |
+| 5 | Treeline | day | haze | `book1` |
+| 6 | Treeline (fern pulse) | night | clear | `book1` |
+| 7 | South gate / Carver marker | late day | haze | `book1` |
+| 8 | Treeline | night | haze | `book1` |
+| 9 | Ridge-7 | day | clear | `book1` |
+| 10 | Ridge-7 | day | **storm** | `book1` |
+| 11 | Treeline | day | rain | `book1` |
+| 12 | Southern ruin | day | haze | `book1` |
+| 13 | Colony | night | clear | `book1` |
+| 14 | Colony (command dome) | afternoon | haze | `book1` |
+| 15 | Coast memorial | dusk | haze | `book2early` |
+| 16 | Coast memorial | dusk | clear | `book2early` |
+
+The presets live in `src/game/data.ts` (`CHAPTER_SCENES`); the arrival notes
+reuse the codex `chapterRef` teasers, so the link, the in-game codex funnel,
+and the book page speak the same line.
+
+## Presence — survey ghosts
+
+Other current readers appear in-world as **silent holographic survey ghosts**.
+There is no chat and no interaction — callsigns only, deliberately mute.
+Privacy posture:
+
+- The only data on the wire is a position/orientation/animation sample and one
+  of the three fixed operative callsigns. There is no free-text channel of any
+  kind.
+- Peer ids are random per session. Nothing persistent identifies a reader.
+- Nothing from the wire is trusted: remote positions are clamped to world
+  bounds and every string is sanitized before render.
+- Settings → PRESENCE turns it off entirely (persisted with the save
+  preferences). Off is total: the client neither joins the mesh nor transmits.
+
+**Host-relevant:** presence rooms are partitioned by spoiler ceiling — the
+room name is `fieldops-<spoilerCeiling>` — so a `book1` reader never sees
+ghosts standing at Book II locations. Framing the game with `?spoiler=book1`
+therefore also selects the book1-only room.
+
+## Aggregate ending tally
+
+**Host-relevant:** the game reports each completed run's ending to
+`POST /api/protocol` (`{ ending: "silent" | "broadcast" }`, one count per run,
+no identifiers) and reads the aggregate back from `GET /api/protocol`
+(`{ broadcast: number, silent: number }`) to render the communal
+quiet-protocol statistic on the completion screen. A host page may hit the GET
+endpoint to surface the same number on the novel site. Below a small quorum of
+total runs the game shows a sealed-tally line instead of a noisy percentage.
 
 ## The message protocol
 

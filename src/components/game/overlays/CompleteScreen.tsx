@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
 import { useGameStore } from "@/game/store";
+import { fetchProtocolStats, postEnding } from "@/lib/telemetry";
+
+/**
+ * Below this many total runs the communal stat reads as noise, not signal, so
+ * the screen shows a sealed-tally line instead of a jumpy percentage.
+ */
+const TALLY_QUORUM = 25;
 
 /** Where the doorway out of the game points; one env var overrides for staging. */
 const NOVEL_SITE_URL =
@@ -18,6 +25,10 @@ export function CompleteScreen() {
     (s) => s.visibleObjectives().filter((o) => o.done).length,
   );
   const [armed, setArmed] = useState(false);
+  const [tally, setTally] = useState<{
+    broadcast: number;
+    silent: number;
+  } | null>(null);
   const broadcast = ending === "broadcast";
   // This screen only mounts after gameplay, so navigator exists; the guard is
   // for the share API itself (desktop browsers mostly lack it).
@@ -29,6 +40,35 @@ export function CompleteScreen() {
     const t = window.setTimeout(() => setArmed(false), 5000);
     return () => window.clearTimeout(t);
   }, [armed]);
+
+  // Communal quiet-protocol tally. Each completed run is counted exactly once:
+  // the guard flag persists with the save, so remounting this screen (or
+  // reloading onto it) never double-counts, and reset() clears it for the next
+  // operative's run. Network failure never blocks or errors the screen —
+  // postEnding is fire-and-forget and fetchProtocolStats resolves null.
+  useEffect(() => {
+    if (!ending) return;
+    const s = useGameStore.getState();
+    if (!s.flags["protocol-tallied"]) {
+      s.raiseFlag("protocol-tallied");
+      void postEnding(ending).catch(() => undefined);
+    }
+    let cancelled = false;
+    void fetchProtocolStats()
+      .then((stats) => {
+        if (!cancelled && stats) setTally(stats);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [ending]);
+
+  const tallyRuns = tally ? tally.broadcast + tally.silent : 0;
+  const violatedPct =
+    tally && tallyRuns > 0
+      ? ((tally.broadcast / tallyRuns) * 100).toFixed(1)
+      : "0.0";
 
   const downloadLog = () => {
     const blob = new Blob([exportJournal()], {
@@ -102,6 +142,14 @@ export function CompleteScreen() {
               Book I path complete · Book II ops available later
             </p>
           </>
+        )}
+
+        {tally && (
+          <p className="mt-4 font-mono text-[10px] leading-relaxed text-dim">
+            {tallyRuns > TALLY_QUORUM
+              ? `ODYSSEY COMMAND — ${violatedPct}% of field operatives have violated quiet protocol.`
+              : "ODYSSEY COMMAND — survey rotation tally sealed pending quorum."}
+          </p>
         )}
 
         <div className="mt-6 rounded-md border border-border bg-surface/40 p-3 text-left">

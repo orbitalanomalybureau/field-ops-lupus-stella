@@ -9,6 +9,8 @@ import type {
   Objective,
   ScanTarget,
   SpawnPoint,
+  SpoilerCeiling,
+  WeatherKind,
   WorldMarker,
 } from "./types";
 
@@ -1132,6 +1134,146 @@ export const SPAWNS: Record<SpawnPoint, { x: number; z: number; yaw: number }> =
   ruins: { x: 18, z: 140, yaw: Math.PI },
   coast: { x: 20, z: 185, yaw: Math.PI },
   treeline: { x: 0, z: 70, yaw: Math.PI },
+};
+
+/**
+ * Chapter scene links — the novel site's per-chapter "Visit this scene" hook
+ * (`?chapter=N`, or `chapter` on a fieldops:deeplink message). Each preset
+ * stages a spawn for the next deploy, pins the clock and the sky to the
+ * chapter's hour and weather, and queues `note` as the arrival ticker line.
+ *
+ * Rules the store enforces (applyDeepLink):
+ * - `ceiling` only ever RAISES the reader's spoiler ceiling toward the
+ *   preset — a chapter link proves the reader reached that page, but it never
+ *   lowers a ceiling they already opened.
+ * - QA pins (`?tod`, `?wx`) and an explicit `?spawn` in the same URL win.
+ *
+ * `tod` is the 0..1 world clock (night is < 0.25 or > 0.78 — see isNight);
+ * notes reuse the codex chapterRef teasers verbatim where one exists, so the
+ * link, the codex funnel, and the book page all speak the same line.
+ */
+export const CHAPTER_SCENES: Record<
+  string,
+  {
+    spawn: SpawnPoint;
+    tod: number;
+    wx: WeatherKind;
+    ceiling: SpoilerCeiling;
+    note: string;
+  }
+> = {
+  "1": {
+    spawn: "colony",
+    tod: 0.27,
+    wx: "clear",
+    ceiling: "book1",
+    note: "CH. 1 — the first amber dawn over a crimson sea",
+  },
+  "2": {
+    spawn: "colony",
+    tod: 0.45,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 2 — what came home from Promethei Terra",
+  },
+  "3": {
+    spawn: "colony",
+    tod: 0.5,
+    wx: "clear",
+    ceiling: "book1",
+    note: "CH. 3 — how the plateau was chosen, and what it cost",
+  },
+  "4": {
+    spawn: "colony",
+    tod: 0.74,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 4 — the machines that keep a colony invisible",
+  },
+  "5": {
+    spawn: "treeline",
+    tod: 0.5,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 5 — first walk under a kilometer of canopy",
+  },
+  "6": {
+    spawn: "treeline",
+    tod: 0.85,
+    wx: "clear",
+    ceiling: "book1",
+    note: "CH. 6 — the night the understory kept time",
+  },
+  "7": {
+    spawn: "south-gate",
+    tod: 0.7,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 7 — the shift Carver did not walk away from",
+  },
+  "8": {
+    spawn: "treeline",
+    tod: 0.82,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 8 — a hunt that went both ways",
+  },
+  "9": {
+    spawn: "ridge7",
+    tod: 0.45,
+    wx: "clear",
+    ceiling: "book1",
+    note: "CH. 9 — west along the basalt spine",
+  },
+  "10": {
+    spawn: "ridge7",
+    tod: 0.6,
+    wx: "storm",
+    ceiling: "book1",
+    note: "CH. 10 — the sky goes copper",
+  },
+  "11": {
+    spawn: "treeline",
+    tod: 0.55,
+    wx: "rain",
+    ceiling: "book1",
+    note: "CH. 11 — the long walk back through the rain",
+  },
+  "12": {
+    spawn: "ruins",
+    tod: 0.5,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 12 — the word under the Titans",
+  },
+  "13": {
+    spawn: "colony",
+    tod: 0.88,
+    wx: "clear",
+    ceiling: "book1",
+    note: "CH. 13 — what the lattice counts after dark",
+  },
+  "14": {
+    spawn: "colony",
+    tod: 0.62,
+    wx: "haze",
+    ceiling: "book1",
+    note: "CH. 14 — the ops floor holds its breath",
+  },
+  "15": {
+    spawn: "coast",
+    tod: 0.74,
+    wx: "haze",
+    ceiling: "book2early",
+    note: "CH. 15 — the doctrine gets its name",
+  },
+  "16": {
+    spawn: "coast",
+    tod: 0.75,
+    wx: "clear",
+    ceiling: "book2early",
+    note: "CH. 16 — the far shore answers",
+  },
 };
 
 export const WORLD = {

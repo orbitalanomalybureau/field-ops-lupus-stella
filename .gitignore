@@ -1,0 +1,31 @@
+node_modules
+.vercel
+dist
+.env
+.env.*
+!.env.example
+*.log
+/tmp
+.DS_Store
+screenshots/*.png
+.playwright
+
+# local / agent
+/tmp
+screenshots/
+*.png
+!public/icons/*.png
+.output
+.wxt
+# novel manuscripts (keep private / local)
+/attachments/
+# agent skill packs (not needed to run the app)
+.grok/
+# lock / status noise
+.node_modules.lock
+.grok/status
+# local QA dumps
+scripts/qa-*.mjs
+!scripts/browser-smoke.mjs
+!scripts/migrate.mjs
+!scripts/preview-thumbnail.mjs

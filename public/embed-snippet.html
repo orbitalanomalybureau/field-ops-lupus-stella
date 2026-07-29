@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Field Ops embed snippet — exodus2121.com</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #05060a;
+        color: #e8ebe6;
+        padding: 1.5rem;
+      }
+      code,
+      pre {
+        background: #12161f;
+        border: 1px solid #2a3340;
+        border-radius: 6px;
+      }
+      pre {
+        padding: 1rem;
+        overflow: auto;
+      }
+      iframe {
+        width: 100%;
+        height: 720px;
+        border: 0;
+        background: #05060a;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Classified Terminal — Field Ops embed</h1>
+    <p>
+      Drop this iframe on
+      <a href="https://exodus2121.com/" style="color: #3d9e8f">exodus2121.com</a>
+      after you deploy Field Ops to your host.
+    </p>
+    <pre id="snippet"></pre>
+    <h2>Live preview (same origin)</h2>
+    <iframe
+      id="fo"
+      src="/embed?spoiler=book2early"
+      title="Field Ops"
+      allow="fullscreen; autoplay; pointer-lock"
+    ></iframe>
+    <script>
+      const host = location.origin;
+      document.getElementById("snippet").textContent = `<!-- Classified Terminal · SIM-012 -->
+<iframe
+  src="${host}/embed?spoiler=book2early"
+  title="Field Ops: Lupus Stella"
+  allow="fullscreen; autoplay; pointer-lock"
+  style="width:100%;height:min(80vh,800px);border:0;background:#05060a"
+></iframe>
+<script>
+  window.addEventListener("message", (e) => {
+    if (e.data?.type === "fieldops:ready") console.log("Field Ops online");
+    if (e.data?.type === "fieldops:phase") console.log("phase", e.data.phase);
+  });
+  // iframe.contentWindow.postMessage({ type: "fieldops:pause" }, "*");
+<\/script>`;
+    </script>
+  </body>
+</html>

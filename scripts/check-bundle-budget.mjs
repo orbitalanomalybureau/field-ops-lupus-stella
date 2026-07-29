@@ -32,7 +32,11 @@ const BUDGETS = [
   {
     name: "total client JS",
     match: (f) => f.endsWith(".js"),
-    maxKb: 460,
+    // Raised from 460 when N8AO landed: ambient occlusion costs ~87 KB gz and
+    // only the "high" tier ever runs it. It rides in the lazy world chunk, so
+    // the menu path is unaffected and phones pay nothing at runtime — but they
+    // still download it. Lazy-loading the pass per tier would win that back.
+    maxKb: 520,
   },
   {
     name: "total CSS",

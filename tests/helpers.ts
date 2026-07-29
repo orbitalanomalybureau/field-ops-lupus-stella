@@ -26,6 +26,8 @@ export type DeepLink = {
   tod?: string;
   /** Test-only: pin the weather so golden screenshots are reproducible. */
   wx?: "clear" | "haze" | "rain" | "storm";
+  /** Pin the graphics tier. Tests default to "low" — see deployToSurface. */
+  quality?: "low" | "medium" | "high";
 };
 
 export function deepLinkUrl(link: DeepLink, path = "/"): string {
@@ -47,7 +49,14 @@ export async function deployToSurface(
   page: Page,
   link: DeepLink = { operative: "marine" },
 ): Promise<void> {
-  await page.goto(deepLinkUrl(link), { waitUntil: "domcontentloaded" });
+  // Pin the low tier unless a test asks otherwise. detectTier() reads real
+  // hardware hints and picks "high" on a dev machine, so the suite would
+  // otherwise measure ambient occlusion and full-density grass through a
+  // software rasterizer — the tier no phone will ever run, at the frame rate
+  // no GPU will ever produce. Low is what mobile gets, and it is what the
+  // behavioural assertions want to exercise.
+  const withQuality: DeepLink = { quality: "low", ...link };
+  await page.goto(deepLinkUrl(withQuality), { waitUntil: "domcontentloaded" });
 
   // Boot screen auto-advances; character select needs a pick unless deep-linked.
   if (!link.operative) {

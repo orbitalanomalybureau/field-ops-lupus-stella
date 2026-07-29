@@ -11,6 +11,8 @@ import {
 import { postToParent } from "@/lib/embed";
 import { passesCeiling, visibleObjectivesOf } from "./selectors";
 import { getAudio } from "./audio";
+import { detectTier, isQualityTier, lowerTier } from "./quality";
+import type { QualityTier } from "./quality";
 import type {
   AnimState,
   CharacterId,
@@ -30,7 +32,7 @@ import type {
 const SAVE_KEY = "lupus-fieldops-v4";
 
 /** Bumped when the blob shape changes. Older blobs still load, best-effort. */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 /** Keys from abandoned save schemas, swept on boot so they stop rotting. */
 const LEGACY_SAVE_KEYS = [
@@ -87,6 +89,8 @@ type SaveBlob = {
   journal?: JournalEntry[];
   masterVolume?: number;
   reducedMotion?: boolean;
+  quality?: QualityTier;
+  qualityAuto?: boolean;
   playerPos?: { x: number; y: number; z: number };
   playerYaw?: number;
   timeOfDay?: number;
@@ -143,6 +147,18 @@ type GameStore = {
   dynamicMarkers: WorldMarker[];
   hasSave: boolean;
   reducedMotion: boolean;
+  /**
+   * Graphics tier. A device preference, persisted with the save blob and read
+   * by GameCanvas (dpr, shadows, far plane), PostFX (which passes run) and by
+   * the terrain, vegetation and weather systems via `QUALITY[quality]`.
+   */
+  quality: QualityTier;
+  /**
+   * True while the tier is engine-chosen — seeded by `detectTier()` and open to
+   * one measured demotion. Set false the moment the player picks a tier, which
+   * makes their choice final.
+   */
+  qualityAuto: boolean;
   masterVolume: number;
   setPhase: (p: GamePhase) => void;
   togglePause: () => void;
@@ -195,6 +211,8 @@ type GameStore = {
   applyDeepLink: (params: URLSearchParams) => void;
   exportJournal: () => string;
   setReducedMotion: (v: boolean) => void;
+  setQuality: (tier: QualityTier | "auto") => void;
+  autoTuneQuality: () => void;
   initPreferences: () => void;
   setMasterVolume: (v: number) => void;
   reset: () => void;
@@ -358,6 +376,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   dynamicMarkers: [],
   hasSave: false,
   reducedMotion: false,
+  // Static rather than `detectTier()` so the module has the same value on the
+  // server and on the first client render; initPreferences seeds the real one.
+  quality: "medium",
+  qualityAuto: true,
   masterVolume: 0.7,
 
   setPhase: (phase) => set({ phase }),
@@ -378,13 +400,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ reducedMotion });
     get().persist();
   },
+
+  setQuality: (tier) => {
+    // "auto" re-derives from hardware hints and hands the tier back to the
+    // engine; anything else is the player's word and the auto-tuner stops.
+    const quality = tier === "auto" ? detectTier() : tier;
+    set({ quality, qualityAuto: tier === "auto" });
+    get().persist();
+  },
+
+  /**
+   * One quiet step down, for the frametime sampler only. Never raises: a player
+   * who chose a tier keeps it, and quality that oscillates is worse than
+   * quality that is simply low.
+   */
+  autoTuneQuality: () => {
+    if (!get().qualityAuto) return;
+    const next = lowerTier(get().quality);
+    if (!next) return;
+    set({ quality: next });
+    get().pushMessage("OPTICS — reducing survey fidelity");
+    get().persist();
+  },
+
   initPreferences: () => {
     if (typeof window === "undefined" || !window.matchMedia) return;
-    if (typeof readSave()?.reducedMotion === "boolean") return;
-    set({
-      reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
-        .matches,
-    });
+    const saved = readSave();
+    if (typeof saved?.reducedMotion !== "boolean") {
+      set({
+        reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
+          .matches,
+      });
+    }
+    if (!isQualityTier(saved?.quality)) {
+      set({ quality: detectTier(), qualityAuto: true });
+    }
   },
   setMasterVolume: (masterVolume) => {
     set({ masterVolume: Math.max(0, Math.min(1, masterVolume)) });
@@ -812,6 +862,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (wx === "clear" || wx === "haze" || wx === "rain" || wx === "storm") {
       get().setWeather(wx);
     }
+    // Not QA-only: a host page embedding the game on a page that is already
+    // doing heavy work has a legitimate reason to pin the cheap tier.
+    const q = params.get("quality");
+    if (q === "low" || q === "medium" || q === "high") get().setQuality(q);
     if (params.get("auto") === "1" && get().characterId) {
       get().startMission();
     }
@@ -920,6 +974,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
           journal: s.journal,
           masterVolume: s.masterVolume,
           reducedMotion: s.reducedMotion,
+          quality: s.quality,
+          qualityAuto: s.qualityAuto,
           playerPos: s.playerPos,
           playerYaw: s.playerYaw,
           timeOfDay: s.timeOfDay,
@@ -991,6 +1047,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         journal: data.journal ?? [],
         masterVolume: data.masterVolume ?? 0.7,
         reducedMotion: data.reducedMotion ?? get().reducedMotion,
+        // A demoted auto tier is restored as-is rather than re-detected: the
+        // sampler already knows more about this device than the hints do.
+        quality: isQualityTier(data.quality) ? data.quality : get().quality,
+        qualityAuto: data.qualityAuto ?? get().qualityAuto,
         playerPos: data.playerPos ?? get().playerPos,
         playerYaw: data.playerYaw ?? get().playerYaw,
         timeOfDay: data.timeOfDay ?? get().timeOfDay,

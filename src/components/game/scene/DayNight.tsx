@@ -2,39 +2,66 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { WORLD } from "@/game/data";
+import { atmosphere } from "@/game/atmosphere";
 import { useGameStore } from "@/game/store";
 
-/** Full day cycle driving lights, fog, sky (28h-feel). */
+/**
+ * Sky palette as three stops blended by solar elevation, not four hex values
+ * picked by `if`. Dawn and dusk are the same stop approached from opposite
+ * directions, which is what makes the transition continuous.
+ */
+const HORIZON_NIGHT = new THREE.Color("#111a2e");
+const HORIZON_DUSK = new THREE.Color("#d2582a");
+const HORIZON_DAY = new THREE.Color("#b06034");
+const ZENITH_NIGHT = new THREE.Color("#04060e");
+const ZENITH_DUSK = new THREE.Color("#2c1c3a");
+const ZENITH_DAY = new THREE.Color("#33305c");
+const SUN_NIGHT = new THREE.Color("#6a80b0");
+const SUN_DUSK = new THREE.Color("#ff7a34");
+const SUN_DAY = new THREE.Color("#ffc79a");
+
+const STORM_TINT = new THREE.Color("#171b23");
+const SCANNER_FOG = new THREE.Color("#12211f");
+const AMB_NIGHT = new THREE.Color("#304060");
+const AMB_DAY = new THREE.Color("#d09060");
+const AMB_SCAN = new THREE.Color("#60a090");
+const HEMI_NIGHT = new THREE.Color("#203050");
+const HEMI_DAY = new THREE.Color("#c87840");
+
+function blend3(
+  out: THREE.Color,
+  night: THREE.Color,
+  dusk: THREE.Color,
+  day: THREE.Color,
+  wn: number,
+  wu: number,
+  wd: number,
+): void {
+  out.setRGB(
+    night.r * wn + dusk.r * wu + day.r * wd,
+    night.g * wn + dusk.g * wu + day.g * wd,
+    night.b * wn + dusk.b * wu + day.b * wd,
+  );
+}
+
+/**
+ * Full day cycle driving lights and fog (28h-feel), and the single writer of
+ * `atmosphere` — the sky dome, the fog colour and anything else that has to
+ * agree with the horizon read that object instead of recomputing their own.
+ * Mount this before every consumer so they read the current frame's values.
+ */
 export function DayNight() {
   const sun = useRef<THREE.DirectionalLight>(null);
   const amb = useRef<THREE.AmbientLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
   const fill = useRef<THREE.DirectionalLight>(null);
-  const sky = useRef<THREE.Mesh>(null);
-  const haze = useRef<THREE.Mesh>(null);
-  const stars = useRef<THREE.Points>(null);
-  const moon = useRef<THREE.Mesh>(null);
-  const sunMesh = useRef<THREE.Mesh>(null);
   const clockAcc = useRef(0);
-  const bgColor = useMemo(() => new THREE.Color("#2a1812"), []);
-  const tmpA = useMemo(() => new THREE.Color(), []);
-  const tmpB = useMemo(() => new THREE.Color(), []);
-  const sunDir = useMemo(() => new THREE.Vector3(), []);
   const todPublish = useRef(0);
-
-  const starPos = useMemo(() => {
-    const n = 1000;
-    const a = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const th = Math.random() * Math.PI * 2;
-      const ph = Math.random() * Math.PI * 0.48;
-      const r = 240;
-      a[i * 3] = Math.sin(ph) * Math.cos(th) * r;
-      a[i * 3 + 1] = Math.cos(ph) * r * 0.55 + 30;
-      a[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * r;
-    }
-    return a;
-  }, []);
+  const storm = useRef(0);
+  const fogNear = useRef(20);
+  const fogFar = useRef(150);
+  const bgColor = useMemo(() => new THREE.Color("#2a1812"), []);
+  const lightDir = useMemo(() => new THREE.Vector3(), []);
 
   useFrame((state, delta) => {
     if (useGameStore.getState().phase === "paused") return;
@@ -54,23 +81,101 @@ export function DayNight() {
     const elev = Math.sin(tod * Math.PI * 2 - Math.PI * 0.5);
     const dayFactor = THREE.MathUtils.clamp(elev * 0.5 + 0.5, 0, 1);
     const nightFactor = 1 - dayFactor;
-    const isDawn = tod > 0.2 && tod < 0.35;
-    const isDusk = tod > 0.65 && tod < 0.8;
 
-    const sunX = Math.cos(tod * Math.PI * 2) * 90;
-    const sunY = 8 + dayFactor * 70;
-    const sunZ = Math.sin(tod * Math.PI * 2) * 40 - 20;
+    // Storminess is filtered rather than stepped: the weather sim switches kind
+    // in one frame, and a hard cut in cloud coverage is very visible.
+    const base =
+      weather === "storm"
+        ? 1
+        : weather === "rain"
+          ? 0.55
+          : weather === "haze"
+            ? 0.28
+            : 0.08;
+    const stormTarget = THREE.MathUtils.clamp(base * (0.6 + wi * 0.6), 0, 1);
+    storm.current += (stormTarget - storm.current) * Math.min(1, d * 0.55);
+
+    // True celestial direction — it dips below the horizon, so the disc sets and
+    // the scatter lobe sinks with it. Keeps the original azimuth sweep so the
+    // sun still crosses the part of the sky the world was lit for.
+    const az = tod * Math.PI * 2;
+    const cosEl = Math.sqrt(Math.max(0, 1 - elev * elev));
+    const hx = Math.cos(az);
+    const hz = Math.sin(az) * 0.44 - 0.22;
+    const hl = Math.hypot(hx, hz) || 1;
+    atmosphere.sunDir
+      .set((hx / hl) * cosEl, elev, (hz / hl) * cosEl)
+      .normalize();
+    atmosphere.dayFactor = dayFactor;
+    atmosphere.storminess = storm.current;
+
+    const wDay = THREE.MathUtils.smoothstep(elev, 0.02, 0.4);
+    const wNight = 1 - THREE.MathUtils.smoothstep(elev, -0.32, -0.02);
+    const wDusk = Math.max(0, 1 - wDay - wNight);
+    blend3(
+      atmosphere.horizon,
+      HORIZON_NIGHT,
+      HORIZON_DUSK,
+      HORIZON_DAY,
+      wNight,
+      wDusk,
+      wDay,
+    );
+    blend3(
+      atmosphere.zenith,
+      ZENITH_NIGHT,
+      ZENITH_DUSK,
+      ZENITH_DAY,
+      wNight,
+      wDusk,
+      wDay,
+    );
+    // The sun tint stays untinted by weather: the light already loses most of
+    // its intensity in a storm, and the sky shader damps its own lobe.
+    blend3(
+      atmosphere.sunColor,
+      SUN_NIGHT,
+      SUN_DUSK,
+      SUN_DAY,
+      wNight,
+      wDusk,
+      wDay,
+    );
+    atmosphere.horizon.lerp(STORM_TINT, storm.current * 0.6);
+    atmosphere.zenith.lerp(STORM_TINT, storm.current * 0.75);
+
+    // Fog is the horizon pulled a little toward the zenith, so distant terrain
+    // resolves into exactly the colour the dome paints behind it.
+    atmosphere.fog.copy(atmosphere.horizon).lerp(atmosphere.zenith, 0.14);
+    if (scanner) atmosphere.fog.lerp(SCANNER_FOG, 0.55);
+
+    // Slow wander so grass, canopy and rain drift agree and still change.
+    const angle =
+      0.7 +
+      Math.sin(clockAcc.current * 0.011) * 1.1 +
+      Math.sin(clockAcc.current * 0.037) * 0.28;
+    const mag = 0.3 + storm.current * 1.7;
+    atmosphere.wind.set(Math.cos(angle) * mag, Math.sin(angle) * mag);
 
     if (sun.current) {
       // The shadow box is only ±60, so it rides the player instead of the
       // origin; the default light target is outside the scene graph, hence
-      // the manual matrix update.
+      // the manual matrix update. Elevation is floored well above the horizon
+      // — the sky's sun may set, but a shadow caster below it would light the
+      // terrain from underneath.
       const p = useGameStore.getState().playerPos;
-      sunDir.set(sunX, sunY, sunZ).normalize();
+      const ly = Math.max(elev, 0.16);
+      const lcos = Math.sqrt(Math.max(0, 1 - ly * ly));
+      const hlen = Math.hypot(atmosphere.sunDir.x, atmosphere.sunDir.z) || 1;
+      lightDir.set(
+        (atmosphere.sunDir.x / hlen) * lcos,
+        ly,
+        (atmosphere.sunDir.z / hlen) * lcos,
+      );
       sun.current.position.set(
-        p.x + sunDir.x * 90,
-        p.y + sunDir.y * 90,
-        p.z + sunDir.z * 90,
+        p.x + lightDir.x * 90,
+        p.y + lightDir.y * 90,
+        p.z + lightDir.z * 90,
       );
       sun.current.target.position.set(p.x, p.y, p.z);
       sun.current.target.updateMatrixWorld();
@@ -80,93 +185,58 @@ export function DayNight() {
       else if (weather === "haze") intensity *= 0.85;
       if (scanner) intensity *= 0.7;
       sun.current.intensity = intensity;
-      sun.current.color.set(
-        isDawn || isDusk ? "#ff8a50" : dayFactor > 0.5 ? "#ffc090" : "#6a80b0",
-      );
+      sun.current.color.copy(atmosphere.sunColor);
     }
 
     if (amb.current) {
       amb.current.intensity =
         (scanner ? 0.3 : 0.2 + dayFactor * 0.35) *
         (weather === "storm" ? 0.6 : 1);
-      amb.current.color.set(
-        scanner ? "#60a090" : dayFactor > 0.4 ? "#d09060" : "#304060",
-      );
+      if (scanner) amb.current.color.copy(AMB_SCAN);
+      else amb.current.color.copy(AMB_NIGHT).lerp(AMB_DAY, dayFactor);
     }
     if (hemi.current) {
       hemi.current.intensity = 0.35 + dayFactor * 0.4;
-      hemi.current.color.set(dayFactor > 0.5 ? "#c87840" : "#203050");
+      hemi.current.color.copy(HEMI_NIGHT).lerp(HEMI_DAY, dayFactor);
       hemi.current.groundColor.set("#1a2a22");
     }
     if (fill.current) {
       fill.current.intensity = 0.15 + nightFactor * 0.25;
     }
 
-    let midHex = "#3a2014";
-    if (dayFactor > 0.55) midHex = "#8a4020";
-    else if (isDawn || isDusk) midHex = "#c05028";
-    else midHex = "#101828";
+    // Weather still sets the visibility envelope; it is filtered here and then
+    // read as a density by the height-fog chunk SkyDome installs.
+    let nearT = scanner ? 14 : 20 + dayFactor * 8;
+    let farT = scanner ? 85 : 120 + dayFactor * 50;
     if (weather === "storm") {
-      tmpA.set(midHex);
-      tmpB.set("#1a1e28");
-      midHex = `#${tmpA.lerp(tmpB, 0.65).getHexString()}`;
+      nearT = 8;
+      farT = 55 + (1 - wi) * 30;
+    } else if (weather === "rain") {
+      nearT = 14;
+      farT = 90;
     }
-
-    if (sky.current) {
-      (sky.current.material as THREE.MeshBasicMaterial).color.set(midHex);
-    }
-    if (haze.current) {
-      const mat = haze.current.material as THREE.MeshBasicMaterial;
-      mat.color.set(isDawn || isDusk ? "#ff6020" : midHex);
-      mat.opacity = (0.15 + dayFactor * 0.12) * (weather === "clear" ? 0.8 : 1.1);
-    }
-    if (sunMesh.current) {
-      sunMesh.current.position.set(sunX * 0.9, sunY * 0.85, sunZ * 0.9);
-      sunMesh.current.visible = dayFactor > 0.12;
-      (sunMesh.current.material as THREE.MeshBasicMaterial).color.set(
-        isDawn || isDusk ? "#ff8040" : "#ffb070",
-      );
-    }
-    if (moon.current) {
-      moon.current.position.set(-sunX * 0.7, 25 + nightFactor * 30, -sunZ * 0.5);
-      moon.current.visible = nightFactor > 0.35;
-    }
-    if (stars.current) {
-      const mat = stars.current.material as THREE.PointsMaterial;
-      mat.opacity = nightFactor * 0.75 * (weather === "storm" ? 0.2 : 1);
-    }
+    const k = Math.min(1, d * 0.7);
+    fogNear.current += (nearT - fogNear.current) * k;
+    fogFar.current += (farT - fogFar.current) * k;
 
     const fog = state.scene.fog as THREE.Fog | null;
     if (fog) {
-      let near = scanner ? 14 : 20 + dayFactor * 8;
-      let far = scanner ? 85 : 120 + dayFactor * 50;
-      if (weather === "storm") {
-        near = 8;
-        far = 55 + (1 - wi) * 30;
-      } else if (weather === "rain") {
-        near = 14;
-        far = 90;
-      }
-      fog.near = near;
-      fog.far = far;
-      fog.color.set(
-        scanner
-          ? "#1a2a28"
-          : weather === "storm"
-            ? "#12161c"
-            : dayFactor > 0.5
-              ? "#3a2218"
-              : "#101420",
-      );
+      fog.near = fogNear.current;
+      fog.far = fogFar.current;
+      fog.color.copy(atmosphere.fog);
     }
 
-    bgColor.set(weather === "storm" ? "#0e1014" : midHex);
+    // The dome covers every sky pixel, so this only ever shows on the frames
+    // before it draws — keep it on the horizon so there is no flash.
+    bgColor.copy(atmosphere.horizon);
     state.scene.background = bgColor;
   });
 
   return (
     <group>
       <ambientLight ref={amb} intensity={0.45} color="#d09060" />
+      {/* normalBias: dawn and dusk now rake the terrain at ~9 degrees, where a
+          depth-only bias acnes on ground that is near parallel to the light. */}
       <directionalLight
         ref={sun}
         castShadow
@@ -180,6 +250,7 @@ export function DayNight() {
         shadow-camera-top={60}
         shadow-camera-bottom={-60}
         shadow-bias={-0.00025}
+        shadow-normalBias={0.035}
         position={[55, 72, -25]}
       />
       <hemisphereLight ref={hemi} args={["#c87840", "#1a2a22", 0.7]} />
@@ -189,41 +260,6 @@ export function DayNight() {
         intensity={0.25}
         color="#4060a0"
       />
-
-      <mesh ref={sky}>
-        <sphereGeometry args={[300, 40, 28]} />
-        <meshBasicMaterial side={THREE.BackSide} color="#3a2014" />
-      </mesh>
-      <mesh ref={haze} position={[0, 35, -70]}>
-        <sphereGeometry args={[100, 20, 14]} />
-        <meshBasicMaterial
-          color="#8a4020"
-          transparent
-          opacity={0.22}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh ref={sunMesh} position={[40, 35, -50]}>
-        <sphereGeometry args={[7, 16, 16]} />
-        <meshBasicMaterial color="#ffb070" />
-      </mesh>
-      <mesh ref={moon} position={[-50, 40, 30]}>
-        <sphereGeometry args={[3.5, 12, 12]} />
-        <meshBasicMaterial color="#c8d0e0" />
-      </mesh>
-      <points ref={stars}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[starPos, 3]} />
-        </bufferGeometry>
-        <pointsMaterial
-          color="#ffe8d0"
-          size={0.5}
-          sizeAttenuation
-          transparent
-          opacity={0.4}
-          depthWrite={false}
-        />
-      </points>
     </group>
   );
 }

@@ -3,8 +3,18 @@ import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { WORLD } from "@/game/data";
+import { QUALITY } from "@/game/quality";
 import { useGameStore } from "@/game/store";
-import { sampleHeight } from "@/game/worldHeight";
+import { sampleBiome, sampleHeight } from "@/game/worldHeight";
+
+/** Park–Miller LCG. Golden screenshots depend on this exact stream. */
+function seeded(seed: number) {
+  let s = seed;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
 
 function RidgeCache() {
   const looted = useGameStore((s) => s.cachesLooted.includes("cache-r"));
@@ -32,37 +42,98 @@ function RidgeCache() {
   );
 }
 
+/** The western scatter window: the spine, its flanks, and the approach to it. */
+const SCREE = { x0: -212, z0: -72, sx: 188, sz: 250 };
+const SCREE_CAP = 800;
+
+type Rock = { x: number; z: number; y: number; s: number; r: number; j: number };
+
+/**
+ * Scree follows the ridge mask rather than a hand-drawn arc, so the field
+ * thickens toward the spine and thins onto the approach on its own — the old
+ * 40-rock formula patch left everything either side of it bare.
+ */
+function buildScree(scale: number): Rock[] {
+  const rand = seeded(7717);
+  const out: Rock[] = [];
+  const cap = Math.round(SCREE_CAP * scale);
+  const candidates = Math.round(9000 * scale);
+  const [bx, , bz] = WORLD.ridgeOverlook;
+
+  for (let i = 0; i < candidates && out.length < cap; i++) {
+    const x = SCREE.x0 + rand() * SCREE.sx;
+    const z = SCREE.z0 + rand() * SCREE.sz;
+    // The overlook disc and the cache pedestal have to stay clear to read.
+    if (Math.hypot(x - bx, z - bz) < 8) continue;
+    if (Math.hypot(x + 95, z - 40) < 5) continue;
+    const b = sampleBiome(x, z);
+    const clump = 0.5 + 0.5 * Math.sin(x * 0.043 + z * 0.027) * Math.cos(z * 0.035 - x * 0.02);
+    const d = b.ridge * 1.6 * (0.28 + 0.95 * clump);
+    if (d <= 0 || rand() >= d) continue;
+    out.push({
+      x,
+      z,
+      y: sampleHeight(x, z),
+      // Boulders on the spine, gravel on the flanks.
+      s: (0.35 + rand() * 1.15) * (0.55 + b.ridge * 0.9),
+      r: rand() * Math.PI * 2,
+      j: rand(),
+    });
+  }
+  return out;
+}
+
+/** Survey-B route markers. Positions are load-bearing — do not move. */
+const POSTS: [number, number][] = Array.from({ length: 12 }, (_, i) => {
+  const t = i / 11;
+  return [-35 - t * 75, 30 + t * 30] as [number, number];
+});
+
 export function Ridge7() {
   const planted = useGameStore((s) => s.ridgeBeaconPlanted);
+  const quality = useGameStore((s) => s.quality);
   const beacon = useRef<THREE.Group>(null);
   const pulse = useRef<THREE.MeshStandardMaterial>(null);
   const rockRef = useRef<THREE.InstancedMesh>(null);
+  const postRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
+  const tint = useMemo(() => new THREE.Color(), []);
 
-  const rocks = useMemo(() => {
-    const out: { x: number; z: number; s: number }[] = [];
-    for (let i = 0; i < 40; i++) {
-      const t = i / 40;
-      const x = -70 - t * 55 + Math.sin(i * 1.7) * 8;
-      const z = 20 + t * 55 + Math.cos(i * 2.1) * 10;
-      out.push({ x, z, s: 0.8 + (i % 5) * 0.35 });
-    }
-    return out;
-  }, []);
+  const rocks = useMemo(
+    () => buildScree(QUALITY[quality].vegetationScale),
+    [quality],
+  );
 
   useLayoutEffect(() => {
-    if (!rockRef.current) return;
+    const mesh = rockRef.current;
+    if (!mesh) return;
     rocks.forEach((r, i) => {
-      const y = sampleHeight(r.x, r.z);
-      dummy.position.set(r.x, y + r.s * 0.4, r.z);
-      dummy.rotation.set(0, r.x * 0.2, 0.05);
-      dummy.scale.setScalar(r.s);
+      dummy.position.set(r.x, r.y + r.s * 0.35, r.z);
+      dummy.rotation.set(r.j * 0.4, r.r, 0.05 + r.j * 0.25);
+      dummy.scale.set(r.s * (0.85 + r.j * 0.4), r.s * (0.65 + r.j * 0.5), r.s);
       dummy.updateMatrix();
-      rockRef.current!.setMatrixAt(i, dummy.matrix);
+      mesh.setMatrixAt(i, dummy.matrix);
+      tint.setHSL(0.58 + r.j * 0.04, 0.04 + r.j * 0.07, 0.1 + r.j * 0.12, THREE.SRGBColorSpace);
+      mesh.setColorAt(i, tint);
     });
-    rockRef.current.instanceMatrix.needsUpdate = true;
-    rockRef.current.computeBoundingSphere();
-  }, [rocks, dummy]);
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [rocks, dummy, tint]);
+
+  useLayoutEffect(() => {
+    const mesh = postRef.current;
+    if (!mesh) return;
+    POSTS.forEach(([x, z], i) => {
+      dummy.position.set(x, sampleHeight(x, z) + 0.5, z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [dummy]);
 
   useFrame(({ clock }) => {
     if (pulse.current) {
@@ -78,15 +149,6 @@ export function Ridge7() {
   const bz = WORLD.ridgeOverlook[2];
   const by = sampleHeight(bx, bz);
 
-  const posts = useMemo(() => {
-    const p: [number, number][] = [];
-    for (let i = 0; i < 12; i++) {
-      const t = i / 11;
-      p.push([-35 - t * 75, 30 + t * 30]);
-    }
-    return p;
-  }, []);
-
   return (
     <group>
       <instancedMesh
@@ -96,8 +158,9 @@ export function Ridge7() {
         receiveShadow
       >
         <dodecahedronGeometry args={[1, 0]} />
+        {/* White base colour: the per-instance tint carries the basalt range. */}
         <meshStandardMaterial
-          color="#2a2e34"
+          color="#ffffff"
           roughness={0.92}
           metalness={0.08}
           flatShading
@@ -158,19 +221,10 @@ export function Ridge7() {
         />
       </mesh>
 
-      {posts.map(([x, z], i) => {
-        const y = sampleHeight(x, z);
-        return (
-          <mesh key={i} castShadow position={[x, y + 0.5, z]}>
-            <cylinderGeometry args={[0.1, 0.14, 1, 6]} />
-            <meshStandardMaterial
-              color="#2a6b61"
-              emissive="#3d9e8f"
-              emissiveIntensity={1.4}
-            />
-          </mesh>
-        );
-      })}
+      <instancedMesh ref={postRef} args={[undefined, undefined, POSTS.length]} castShadow>
+        <cylinderGeometry args={[0.1, 0.14, 1, 6]} />
+        <meshStandardMaterial color="#2a6b61" emissive="#3d9e8f" emissiveIntensity={1.4} />
+      </instancedMesh>
 
       <RidgeCache />
     </group>

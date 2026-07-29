@@ -10,6 +10,8 @@ import {
   setLookSensitivity,
 } from "@/game/input";
 import type { Action, Keymap } from "@/game/input";
+import { describeTier } from "@/game/quality";
+import type { QualityTier } from "@/game/quality";
 import { useGameStore } from "@/game/store";
 import type { SpawnPoint, SpoilerCeiling } from "@/game/types";
 
@@ -107,6 +109,9 @@ export function SettingsPanel() {
   const setVol = useGameStore((s) => s.setMasterVolume);
   const reduced = useGameStore((s) => s.reducedMotion);
   const setReduced = useGameStore((s) => s.setReducedMotion);
+  const quality = useGameStore((s) => s.quality);
+  const qualityAuto = useGameStore((s) => s.qualityAuto);
+  const setQuality = useGameStore((s) => s.setQuality);
   const setSpawn = useGameStore((s) => s.setPendingSpawn);
   const pushMessage = useGameStore((s) => s.pushMessage);
   const character = useGameStore((s) => s.getCharacter());
@@ -199,6 +204,34 @@ export function SettingsPanel() {
 
       <label className="mt-5 block">
         <span className="font-mono text-[10px] tracking-widest text-muted">
+          GRAPHICS PRESET
+        </span>
+        <select
+          className="mt-1 min-h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg"
+          value={qualityAuto ? "auto" : quality}
+          onChange={(e) => setQuality(e.target.value as QualityTier | "auto")}
+        >
+          <option value="auto">Auto — match this device</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+      {/* Outside the label so the select's accessible name stays the heading
+          rather than the whole spec sheet. */}
+      <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+        {qualityAuto ? `AUTO · ${quality.toUpperCase()} · ` : ""}
+        {describeTier(quality)}
+      </p>
+      {qualityAuto && (
+        <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+          Auto may step down once if frames run short. Choosing a tier makes it
+          final.
+        </p>
+      )}
+
+      <label className="mt-4 block">
+        <span className="font-mono text-[10px] tracking-widest text-muted">
           SPOILER CEILING
         </span>
         <select
@@ -267,8 +300,12 @@ export function SettingsPanel() {
           onChange={(e) => setReduced(e.target.checked)}
           className="h-4 w-4"
         />
-        <span className="text-sm text-muted">Reduced motion / lighter FX</span>
+        <span className="text-sm text-muted">Reduced motion</span>
       </label>
+      <p className="mt-1 font-mono text-[10px] leading-relaxed text-dim">
+        Calms interface animation, weather particles and screen effects. This is
+        an accessibility setting — use the graphics preset for performance.
+      </p>
 
       <div className="mt-6">
         <div className="flex items-center justify-between gap-3">

@@ -1,6 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useGameStore } from "@/game/store";
-import { MARKERS, WORLD } from "@/game/data";
+import { MARKERS, REGIONS, WORLD } from "@/game/data";
+import { AIM_EVENT, lastHitFrom } from "@/game/feedback";
+import type { AimTelemetry } from "@/game/feedback";
 import {
   isObjectiveActionable,
   passesCeiling,
@@ -12,6 +14,7 @@ import type {
   ItemId,
   Objective,
   ObjectiveId,
+  RegionDef,
   WeatherKind,
   WorldMarker,
 } from "@/game/types";
@@ -455,6 +458,13 @@ export function HUD() {
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
       <DamageVignette />
+      <DamageArc />
+      <Reticle />
+      {/* Suppress only under the map: the objectives panel is open BY DEFAULT,
+          so gating on any-panel-open meant most players never saw a single
+          region card. Objectives/codex live on the left edge; the centered
+          splash does not collide with them. */}
+      <RegionTitles suppressed={panel === "map"} />
 
       <div className="pointer-events-auto absolute left-0 right-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-4">
         <div className="panel-glass min-w-0 max-w-[8.5rem] rounded-md px-3 py-2 sm:max-w-[18rem]">
@@ -695,6 +705,241 @@ function DamageVignette() {
         ).toFixed(2)}) 100%)`,
       }}
     />
+  );
+}
+
+/** Hit tick and kill mark hold times — the reticle's confirm grammar. */
+const HIT_FLARE_MS = 150;
+const KILL_FLARE_MS = 300;
+/** How long the just-refilled cell pip shimmers. */
+const PIP_SHIMMER_MS = 700;
+
+/**
+ * Hold-to-aim reticle and cell pips. A leaf fed entirely by AIM_EVENT
+ * (feedback.ts, ~10 Hz) — it subscribes to no store slice at all, so aiming
+ * costs the HUD tree nothing. Instrument grammar only: brackets, a dot,
+ * hollow squares. No numbers.
+ *
+ * States: hidden (not aiming) · frame (corner brackets + dot) · hot (accent
+ * tint, brackets tighten) · hit tick (dot swells ~150 ms on a hits increment)
+ * · kill mark (X-flare ~300 ms on a kills increment).
+ */
+function Reticle() {
+  const [aim, setAim] = useState<AimTelemetry | null>(null);
+  const [hitFlare, setHitFlare] = useState(false);
+  const [killFlare, setKillFlare] = useState(false);
+  /** Index of the pip that just recharged, for the refill shimmer. */
+  const [freshPip, setFreshPip] = useState<number | null>(null);
+  const prev = useRef<AimTelemetry | null>(null);
+
+  useEffect(() => {
+    let hitT = 0;
+    let killT = 0;
+    let pipT = 0;
+    const onAim = (e: Event) => {
+      const t = (e as CustomEvent<AimTelemetry>).detail;
+      const p = prev.current;
+      prev.current = t;
+      setAim(t);
+      if (p && t.hits > p.hits) {
+        setHitFlare(true);
+        window.clearTimeout(hitT);
+        hitT = window.setTimeout(() => setHitFlare(false), HIT_FLARE_MS);
+      }
+      if (p && t.kills > p.kills) {
+        setKillFlare(true);
+        window.clearTimeout(killT);
+        killT = window.setTimeout(() => setKillFlare(false), KILL_FLARE_MS);
+      }
+      // A cell refilling mid-aim gets a quiet shimmer on the newest pip.
+      if (p && t.aiming && p.aiming && t.cells > p.cells) {
+        setFreshPip(t.cells - 1);
+        window.clearTimeout(pipT);
+        pipT = window.setTimeout(() => setFreshPip(null), PIP_SHIMMER_MS);
+      }
+    };
+    window.addEventListener(AIM_EVENT, onAim);
+    return () => {
+      window.removeEventListener(AIM_EVENT, onAim);
+      window.clearTimeout(hitT);
+      window.clearTimeout(killT);
+      window.clearTimeout(pipT);
+    };
+  }, []);
+
+  if (!aim?.aiming) return null;
+
+  const tone = killFlare
+    ? "text-danger"
+    : hitFlare
+      ? "text-fg"
+      : aim.hot
+        ? "text-accent"
+        : "text-fg/60";
+  const size = aim.hot ? 34 : 42;
+
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute left-1/2 top-1/2"
+    >
+      <div
+        className={`relative -translate-x-1/2 -translate-y-1/2 transition-all duration-100 ${tone}`}
+        style={{ width: size, height: size }}
+      >
+        <span className="absolute left-0 top-0 h-2.5 w-2.5 border-l border-t border-current" />
+        <span className="absolute right-0 top-0 h-2.5 w-2.5 border-r border-t border-current" />
+        <span className="absolute bottom-0 left-0 h-2.5 w-2.5 border-b border-l border-current" />
+        <span className="absolute bottom-0 right-0 h-2.5 w-2.5 border-b border-r border-current" />
+        <span
+          className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current transition-all duration-100 ${
+            hitFlare ? "h-1.5 w-1.5" : "h-1 w-1"
+          }`}
+        />
+        {killFlare && (
+          <>
+            <span className="absolute left-1/2 top-1/2 h-px w-10 -translate-x-1/2 -translate-y-1/2 rotate-45 bg-danger" />
+            <span className="absolute left-1/2 top-1/2 h-px w-10 -translate-x-1/2 -translate-y-1/2 -rotate-45 bg-danger" />
+          </>
+        )}
+        {/* Cell pips — capacity as hollow squares, charge as fill. */}
+        <div className="absolute left-1/2 top-full mt-2 flex -translate-x-1/2 gap-1">
+          {Array.from({ length: aim.maxCells }, (_, i) => (
+            <span
+              key={i}
+              className={`h-1.5 w-1.5 border ${
+                i < aim.cells
+                  ? i === freshPip
+                    ? "animate-pulse border-accent bg-accent/70"
+                    : "border-accent bg-accent"
+                  : "border-fg/40"
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** How long a hit direction stays readable at the screen edge. */
+const HIT_ARC_MS = 600;
+
+/**
+ * Damage-direction arc. Polls feedback's last-hit transient at ~7 Hz — no
+ * event plumbing needed at this cadence — and orients a short danger-tinted
+ * arc around the screen centre by (hit bearing − compass heading).
+ * Creatures reports bearings as atan2(dx, dz) — the world-yaw frame, 0 at
+ * +Z — while the compass frame is atan2(dx, −dz), 0 at north/−Z; the two
+ * differ by 180° − b. compassBearing is per-frame store state, subscribed
+ * HERE and nowhere above — the leaf rule.
+ */
+function DamageArc() {
+  const compass = useGameStore((s) => s.compassBearing);
+  const [hit, setHit] = useState<{ bearing: number; ageMs: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const h = lastHitFrom();
+      // setState(null) when already null is an Object.is bail-out — the idle
+      // poll never re-renders this leaf.
+      setHit(h && h.ageMs < HIT_ARC_MS ? h : null);
+    }, 150);
+    return () => window.clearInterval(id);
+  }, []);
+
+  if (!hit) return null;
+  const rel = relativeBearing(180 - (hit.bearing * 180) / Math.PI, compass);
+  const opacity = Math.max(0, 1 - hit.ageMs / HIT_ARC_MS);
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute left-1/2 top-1/2"
+      style={{ transform: `rotate(${rel}deg)` }}
+    >
+      <div
+        className="absolute -translate-x-1/2 transition-opacity duration-150"
+        style={{ top: "-38vmin", opacity }}
+      >
+        <div className="h-14 w-40 rounded-[100%] border-t-2 border-danger" />
+      </div>
+    </div>
+  );
+}
+
+const REGION_POLL_MS = 500;
+const REGION_HOLD_MS = 2000;
+const REGION_FADE_MS = 600;
+
+/**
+ * Region title cards. A leaf that polls containment at ~2 Hz off the store
+ * snapshot — no per-frame subscription anywhere — and splashes each survey
+ * grid ONCE per save: raiseFlag("region-<id>") rides the existing flags
+ * persistence for free. `suppressed` (any HUD panel open) defers the check
+ * entirely, so a card fires late rather than burning its one showing under a
+ * panel; the phase gate does the same for dialogue and the ruin. Photo mode
+ * never mounts the HUD at all. The book2 shore stays silent under a book1
+ * ceiling, same passesCeiling as every other pin.
+ */
+function RegionTitles({ suppressed }: { suppressed: boolean }) {
+  const [splash, setSplash] = useState<RegionDef | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (suppressed) return;
+    const check = () => {
+      const s = useGameStore.getState();
+      if (s.phase !== "playing") return;
+      const { x, z } = s.playerPos;
+      for (const region of REGIONS) {
+        if (!passesCeiling(region, s.spoilerCeiling)) continue;
+        if (s.flags[`region-${region.id}`]) continue;
+        if (Math.hypot(x - region.x, z - region.z) > region.r) continue;
+        s.raiseFlag(`region-${region.id}`);
+        setSplash(region);
+        break;
+      }
+    };
+    const id = window.setInterval(check, REGION_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [suppressed]);
+
+  useEffect(() => {
+    if (!splash) return;
+    // One frame at opacity-0 so the transition has an edge to rise from.
+    const raf = window.requestAnimationFrame(() => setVisible(true));
+    const fade = window.setTimeout(() => setVisible(false), REGION_HOLD_MS);
+    const clear = window.setTimeout(
+      () => setSplash(null),
+      REGION_HOLD_MS + REGION_FADE_MS,
+    );
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(fade);
+      window.clearTimeout(clear);
+    };
+  }, [splash]);
+
+  if (!splash) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`pointer-events-none absolute left-1/2 top-[26%] w-[min(100%-2rem,32rem)] -translate-x-1/2 text-center transition-opacity duration-500 ${
+        visible ? "opacity-100" : "opacity-0"
+      }`}
+    >
+      <div className="mx-auto mb-2.5 h-px w-28 bg-fg/50" />
+      <p className="font-mono text-base tracking-[0.35em] text-fg sm:text-xl">
+        {splash.name}
+      </p>
+      <p className="mt-1.5 font-mono text-[11px] tracking-widest text-muted">
+        {splash.sub}
+      </p>
+      <div className="mx-auto mt-2.5 h-px w-28 bg-fg/50" />
+    </div>
   );
 }
 

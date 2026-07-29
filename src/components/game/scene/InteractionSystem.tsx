@@ -24,6 +24,15 @@ const CACHES = entitiesOfKind("cache");
  */
 const SITES = ["carver-marker", "verne-plate", "hale-camp"] as const;
 
+/**
+ * Rest targets for the ops-floor bunk, as timeOfDay fractions. Dawn matches
+ * the deploy-time morning (the store default 0.35 sits just after it). Dusk
+ * lands a hair past the store's strict isNight threshold (timeOfDay > 0.78)
+ * so the fern window is already open the frame the operative wakes.
+ */
+const REST_DAWN = 0.3;
+const REST_DUSK = 0.785;
+
 function dist2(ax: number, az: number, bx: number, bz: number) {
   return Math.hypot(ax - bx, az - bz);
 }
@@ -111,6 +120,42 @@ export function InteractionSystem() {
       considerEntity(BY_ID.get("dome-command"), () => store.exitDome(), {
         label: "Exit command dome",
       });
+
+      // REST — the fern harvest is night-only and a day is eight real
+      // minutes; the bunk turns "come back after dark" into one watch
+      // rotation. By day (tod 0.3–0.7) the rotation lands at dusk, when the
+      // fern window opens; any other hour it lands at dawn. Storm weather
+      // never refuses here: the prompt only exists on the ops floor, and the
+      // dome IS the storm shelter — the outside-in-a-storm refusal has no
+      // reachable state. The jump is instantaneous this wave; a fade hook
+      // exists in FieldOpsApp if a later pass wants to dress it.
+      const tod = store.timeOfDay;
+      const toDusk = tod >= 0.3 && tod <= 0.7;
+      considerEntity(
+        BY_ID.get("dome-bunk"),
+        () => {
+          const s = useGameStore.getState();
+          if (s.trackedByFang) {
+            // A predator holding the player's line does not lose it to a nap.
+            s.pushMessage("Can't rest — something has your line.");
+            getAudio().refusalBuzz();
+            return;
+          }
+          // advanceTime takes game hours; timeOfDay is a day fraction at
+          // 24 h per day, so the forward gap to the target scales by 24.
+          const target = toDusk ? REST_DUSK : REST_DAWN;
+          s.advanceTime(((target - tod + 1) % 1) * 24);
+          s.setStamina(100);
+          s.setHealth(Math.min(100, s.health + 20));
+          s.pushMessage(`REST — watch rotated to ${toDusk ? "dusk" : "dawn"}`);
+          getAudio().pulseInteract();
+          s.persist();
+        },
+        {
+          label: toDusk ? "Rest until dusk" : "Rest until dawn",
+          sub: "Watch rotation",
+        },
+      );
     } else {
       considerEntity(BY_ID.get("dome-entry"), () => store.enterDome(), {
         sub: "Ops floor",

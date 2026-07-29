@@ -105,6 +105,23 @@ export type InteractPrompt = {
   dist: number;
 } | null;
 
+/**
+ * A named survey grid — a circle of ground the HUD title-cards on first entry.
+ * First-entry state is a store flag ("region-<id>"), so it persists for free.
+ */
+export type RegionDef = {
+  id: string;
+  /** Tracked-caps splash line, survey fiction: "GRID 7 — RIDGE-7 APPROACH". */
+  name: string;
+  /** Sub-line under the name: survey status, one clause. */
+  sub: string;
+  x: number;
+  z: number;
+  /** Containment radius in metres. */
+  r: number;
+  book2?: boolean;
+};
+
 export type WorldMarker = {
   id: string;
   label: string;
@@ -136,7 +153,19 @@ export type ScanTarget = {
 
 export type WeatherKind = "clear" | "haze" | "rain" | "storm";
 
-export type AnimState = "idle" | "walk" | "run" | "scan" | "combat";
+/**
+ * "aim" is the hold-to-aim rifle posture (cancels the scanner; both arms on
+ * the weapon); "attack" is the ~0.2 s melee sweep window. Both are transient
+ * postures the controller reports through setPlayerMotion, same as the rest.
+ */
+export type AnimState =
+  | "idle"
+  | "walk"
+  | "run"
+  | "scan"
+  | "combat"
+  | "aim"
+  | "attack";
 
 /**
  * One selectable reply. `if` gates visibility — "flagName", "!flagName", or

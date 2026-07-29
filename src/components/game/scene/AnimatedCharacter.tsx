@@ -1,7 +1,9 @@
 import { useFrame } from "@react-three/fiber";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { sampleHeight } from "@/game/worldHeight";
+import { AIM_EVENT, attackPoseActive } from "@/game/feedback";
+import type { AimTelemetry } from "@/game/feedback";
 import type { AnimState } from "@/game/types";
 
 type Props = {
@@ -76,6 +78,10 @@ const wp = new THREE.Vector3();
  * (PlayerController and the NPC system both drive it that way). Airborne is
  * inferred from clearance over the analytic terrain since userData carries no
  * vertical state.
+ *
+ * "aim" shoulders the rifle (both arms on the weapon, head over the right
+ * shoulder, stance squared); "attack" is the ~0.2 s melee sweep, driven by the
+ * anim state or by feedback's attack-pose window, whichever arrives first.
  */
 export function AnimatedCharacter({
   accent = "#3d9e8f",
@@ -98,12 +104,40 @@ export function AnimatedCharacter({
   const shR = useRef<THREE.Group>(null);
   const elL = useRef<THREE.Group>(null);
   const elR = useRef<THREE.Group>(null);
+  const weapon = useRef<THREE.Mesh>(null);
 
   const phase = useRef((hashString(accent + variant) % 628) / 100);
   const idleT = useRef(0);
   const rng = useRef(lcg(hashString(variant + accent)));
   const look = useRef({ yaw: 0, pitch: 0, curYaw: 0, curPitch: 0, timer: 0 });
-  const weights = useRef({ move: 0, run: 0, scan: 0, cbt: 0, crouch: 0, air: 0 });
+  const weights = useRef({
+    move: 0,
+    run: 0,
+    scan: 0,
+    cbt: 0,
+    crouch: 0,
+    air: 0,
+    aim: 0,
+    atk: 0,
+  });
+  /** Shot-recoil impulse, 1 -> 0. Fed by aim telemetry, spent in useFrame. */
+  const rec = useRef(0);
+  const prevCells = useRef<number | null>(null);
+
+  // A discharge is a cells decrement in the aim telemetry (~10 Hz, cheap).
+  // Every character instance shares the window event, but the impulse is
+  // scaled by the aim weight at application time, so NPCs — whose anim never
+  // reads "aim" — cannot twitch when the operative fires.
+  useEffect(() => {
+    const onAim = (e: Event) => {
+      const t = (e as CustomEvent<AimTelemetry>).detail;
+      const prev = prevCells.current;
+      prevCells.current = t.cells;
+      if (prev !== null && t.cells < prev) rec.current = 1;
+    };
+    window.addEventListener(AIM_EVENT, onAim);
+    return () => window.removeEventListener(AIM_EVENT, onAim);
+  }, []);
 
   useFrame((_, delta) => {
     const d = Math.min(delta, 0.05);
@@ -121,6 +155,14 @@ export function AnimatedCharacter({
     w.scan = approach(w.scan, anim === "scan" ? 1 : 0, 7, d);
     w.cbt = approach(w.cbt, combat ? 1 : 0, 7, d);
     w.crouch = approach(w.crouch, anim === "combat" ? 1 : 0, 7, d);
+    w.aim = approach(w.aim, anim === "aim" ? 1 : 0, 10, d);
+    // The melee sweep: Creatures flashes the pose window on a swing and the
+    // controller reports anim "attack" for the same beat — honor either, so
+    // the arm reads even if one writer lags a frame. Fast in, slower out is
+    // what makes a single eased weight look like a strike.
+    const striking = anim === "attack" || attackPoseActive();
+    w.atk = approach(w.atk, striking ? 1 : 0, striking ? 26 : 11, d);
+    rec.current = Math.max(0, rec.current - d * 7);
 
     // PlayerController maps airborne to anim "run"; clearance filters out
     // grounded sprint. NPCs never leave the ground so this stays 0 for them.
@@ -145,8 +187,13 @@ export function AnimatedCharacter({
     const cR = -cL;
 
     const gait = w.move * (1 - w.air);
-    const idleW = (1 - w.move) * (1 - w.scan) * (1 - w.cbt);
+    // Aiming stills the idle sway/glances the same way scan and combat do.
+    const idleW = (1 - w.move) * (1 - w.scan) * (1 - w.cbt) * (1 - w.aim);
     const crouchLeg = w.crouch * (1 - gait);
+    // The strike briefly owns the weapon arm; aim resumes as it decays.
+    const atkW = w.atk;
+    const aimW = w.aim * (1 - atkW);
+    const recoil = rec.current * aimW;
 
     // Seeded idle glance retargeting — never Math.random (golden screenshots).
     const lk = look.current;
@@ -170,7 +217,8 @@ export function AnimatedCharacter({
     if (hipL.current) {
       hipL.current.rotation.x =
         -hipAmp * sL * gait + 0.3 * w.air - 0.3 * crouchLeg;
-      hipL.current.rotation.z = 0.07 * w.scan - 0.1 * crouchLeg;
+      // + narrows the left leg inward — the aim stance squares up slightly.
+      hipL.current.rotation.z = 0.07 * w.scan - 0.1 * crouchLeg + 0.05 * aimW;
     }
     if (kneeL.current) {
       kneeL.current.rotation.x =
@@ -185,7 +233,7 @@ export function AnimatedCharacter({
     if (hipR.current) {
       hipR.current.rotation.x =
         -hipAmp * sR * gait + 0.3 * w.air - 0.3 * crouchLeg;
-      hipR.current.rotation.z = -0.07 * w.scan + 0.1 * crouchLeg;
+      hipR.current.rotation.z = -0.07 * w.scan + 0.1 * crouchLeg - 0.05 * aimW;
     }
     if (kneeR.current) {
       kneeR.current.rotation.x =
@@ -214,8 +262,15 @@ export function AnimatedCharacter({
     }
     if (spine.current) {
       spine.current.rotation.x =
-        0.04 + 0.12 * w.run * gait + 0.1 * w.cbt + 0.06 * w.scan - 0.05 * w.air;
-      spine.current.rotation.y = -0.16 * sL * gait;
+        0.04 +
+        0.12 * w.run * gait +
+        0.1 * w.cbt +
+        0.06 * w.scan -
+        0.05 * w.air +
+        0.06 * aimW;
+      // +y blades the right shoulder back into the stock; the strike swings
+      // the torso the other way, through the sweep.
+      spine.current.rotation.y = -0.16 * sL * gait + 0.12 * aimW - 0.25 * atkW;
     }
     if (ribcage.current) {
       const br = Math.sin(t * 2.3) * (0.4 + 0.6 * idleW);
@@ -223,45 +278,78 @@ export function AnimatedCharacter({
     }
 
     // Arms counter-swing the same-side leg; scan owns the left arm, combat
-    // owns the right (and the left when not scanning).
-    const cbtL = w.cbt * (1 - w.scan);
-    const cbtR = w.cbt * (1 - 0.5 * w.scan);
-    const poseL = Math.max(cbtL, w.scan);
+    // owns the right (and the left when not scanning). Aim owns both — the
+    // right extends the rifle, the left crosses to support the fore-end — so
+    // the guard poses fade out under it rather than stacking.
+    const cbtL = w.cbt * (1 - w.scan) * (1 - aimW);
+    const cbtR = w.cbt * (1 - 0.5 * w.scan) * (1 - Math.max(aimW, atkW));
+    const poseL = Math.max(cbtL, w.scan, aimW);
+    const poseR = Math.max(cbtR, aimW, atkW);
     if (shL.current) {
       shL.current.rotation.x =
         armAmp * sL * gait * (1 - poseL) -
         1.3 * w.scan -
-        0.85 * cbtL +
+        0.85 * cbtL -
+        1.2 * aimW +
         0.15 * w.air;
       shL.current.rotation.z =
-        -0.1 - (cyberArm ? 0.06 : 0) - 0.3 * w.air + 0.15 * w.scan + 0.45 * cbtL;
+        -0.1 -
+        (cyberArm ? 0.06 : 0) -
+        0.3 * w.air +
+        0.15 * w.scan +
+        0.45 * cbtL +
+        0.55 * aimW;
     }
     if (elL.current) {
       elL.current.rotation.x =
         -0.12 -
         (0.18 + (0.35 + 0.5 * w.run) * Math.max(0, -sL)) * gait * (1 - poseL) -
         1.05 * w.scan -
-        0.95 * cbtL;
+        0.95 * cbtL -
+        1.0 * aimW;
     }
     if (shR.current) {
+      // `recoil` shoves the extended arm back toward the shoulder on a
+      // discharge; the spring in rec.current settles it in a few frames.
       shR.current.rotation.x =
-        armAmp * sR * gait * (1 - cbtR) - 1.0 * cbtR + 0.15 * w.air;
-      shR.current.rotation.z = 0.1 + 0.3 * w.air - 0.35 * cbtR;
+        armAmp * sR * gait * (1 - poseR) -
+        1.0 * cbtR -
+        1.5 * aimW -
+        1.35 * atkW +
+        0.15 * w.air +
+        0.25 * recoil;
+      shR.current.rotation.z =
+        0.1 + 0.3 * w.air - 0.35 * cbtR - 0.3 * aimW - 0.6 * atkW;
     }
     if (elR.current) {
       elR.current.rotation.x =
         -0.12 -
-        (0.18 + (0.35 + 0.5 * w.run) * Math.max(0, -sR)) * gait * (1 - cbtR) -
-        0.55 * cbtR;
+        (0.18 + (0.35 + 0.5 * w.run) * Math.max(0, -sR)) * gait * (1 - poseR) -
+        0.55 * cbtR -
+        0.2 * aimW -
+        0.45 * atkW;
+    }
+    // The rifle is a permanent child of the wrist, toggled per frame: aim
+    // must show it even outside combat stance, and React reconciliation does
+    // not run at posture speed.
+    if (weapon.current) {
+      weapon.current.visible = combat || w.aim > 0.05;
     }
 
     // Head: idle glances, slight counter-yaw to the gait, tilts down-left to
-    // the wrist instrument while scanning, up a touch when airborne.
+    // the wrist instrument while scanning, up a touch when airborne. Aim
+    // brings the head over the right shoulder and cants the cheek to the
+    // stock.
     if (head.current) {
       head.current.rotation.y =
-        lk.curYaw * idleW + 0.1 * sL * gait - 0.15 * w.scan;
+        lk.curYaw * idleW + 0.1 * sL * gait - 0.15 * w.scan + 0.08 * aimW;
       head.current.rotation.x =
-        lk.curPitch * idleW + 0.42 * w.scan + 0.06 * w.run * gait - 0.1 * w.air;
+        lk.curPitch * idleW +
+        0.42 * w.scan +
+        0.06 * w.run * gait -
+        0.1 * w.air +
+        0.04 * aimW;
+      head.current.rotation.z = -0.1 * aimW;
     }
   });
 
@@ -471,16 +559,22 @@ export function AnimatedCharacter({
                     roughness={0.55}
                   />
                 </mesh>
-                {combat && (
-                  <mesh position={[0, -0.32, 0.08]} rotation={[1.35, 0, 0]}>
-                    <boxGeometry args={[0.07, 0.07, 0.55]} />
-                    <meshStandardMaterial
-                      color="#12161c"
-                      metalness={0.75}
-                      roughness={0.3}
-                    />
-                  </mesh>
-                )}
+                {/* Pulse rifle. Always mounted; useFrame drives visibility
+                    (combat stance, or any aim weight) so raising the weapon
+                    never waits on a React render. */}
+                <mesh
+                  ref={weapon}
+                  visible={combat}
+                  position={[0, -0.32, 0.08]}
+                  rotation={[1.35, 0, 0]}
+                >
+                  <boxGeometry args={[0.07, 0.07, 0.55]} />
+                  <meshStandardMaterial
+                    color="#12161c"
+                    metalness={0.75}
+                    roughness={0.3}
+                  />
+                </mesh>
               </group>
             </group>
 

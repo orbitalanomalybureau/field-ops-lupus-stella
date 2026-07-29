@@ -7,6 +7,7 @@ export type ControlsProbe = {
   getFps: () => number;
   setKeys: (codes: string[]) => void;
   teleport: (x: number, z: number, yaw?: number) => void;
+  setAim: (on: boolean) => void;
 };
 
 declare global {

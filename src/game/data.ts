@@ -7,6 +7,7 @@ import type {
   MissionBoardItem,
   NpcDef,
   Objective,
+  RegionDef,
   ScanTarget,
   SpawnPoint,
   SpoilerCeiling,
@@ -392,6 +393,12 @@ export const INITIAL_CODEX: CodexEntry[] = [
     id: "route-learning",
     title: "Route learning",
     body: "Shadowfang packs do not follow an operative. They chart one. Repeated transits average into an intercept solution; the pack waits on the solution, not the trail. Vary route. Vary timing. A pattern is a rendezvous you did not agree to.",
+    unlocked: false,
+  },
+  {
+    id: "pulse-rifle",
+    title: "Pulse rifle",
+    body: "Coil-driven EM emitter, shoulder class. One trigger pull dumps a charged cell as a coherent bolt — and as an unfiltered spike on every band the lattice carries. The planet does not distinguish a weapon from a beacon. Every discharge is a small broadcast, and everything out there that reads the noise floor hears it. Cells recharge on their own. Silence does not.",
     unlocked: false,
   },
 ];
@@ -1167,6 +1174,72 @@ export const MARKERS: WorldMarker[] = [
   },
   { id: "npc-t", label: "Thornhill", ...site("thornhill"), kind: "npc" },
   { id: "npc-c", label: "Castillo", ...site("castillo"), kind: "npc" },
+];
+
+/**
+ * Named survey grids — the HUD splashes a title card on FIRST entry into each
+ * circle (flag "region-<id>", persisted free by raiseFlag). Circles are
+ * deliberately sparse and mostly disjoint; where two touch, the HUD shows
+ * whichever contains the operative first and the other lands on a later poll.
+ * Grid numbers are survey-ledger fiction; Ridge-7 sits in grid seven on
+ * purpose. The book2 shore respects passesCeiling like every other pin.
+ */
+export const REGIONS: RegionDef[] = [
+  {
+    id: "plateau",
+    name: "GRID 1 — COLONY PLATEAU",
+    sub: "surveyed — New Eden settlement ground",
+    x: 0,
+    z: 12,
+    r: 24,
+  },
+  {
+    id: "south-gate",
+    name: "GRID 2 — SOUTH GATE LINE",
+    sub: "perimeter — light towers hold to here",
+    x: 0,
+    z: 44,
+    r: 12,
+  },
+  {
+    id: "titans",
+    name: "GRID 3 — TITANS TREELINE",
+    sub: "partial survey — canopy floor unmapped",
+    x: 0,
+    z: 82,
+    r: 24,
+  },
+  {
+    id: "herd-plains",
+    name: "GRID 4 — HERD PLAINS",
+    sub: "open range — approach on arcs",
+    x: -55,
+    z: 95,
+    r: 26,
+  },
+  {
+    id: "ruin-approach",
+    name: "GRID 5 — RUIN APPROACH",
+    sub: "anomaly perimeter — catalog and withdraw",
+    ...site("ruin"),
+    r: 26,
+  },
+  {
+    id: "kaguyahime-shore",
+    name: "GRID 6 — KAGUYAHIME SHORE",
+    sub: "receive-only — far-continent vector",
+    ...site("coast-memorial"),
+    r: 28,
+    book2: true,
+  },
+  {
+    id: "ridge7-approach",
+    name: "GRID 7 — RIDGE-7 APPROACH",
+    sub: "unsurveyed — expedition waiver on file",
+    x: -112,
+    z: 56,
+    r: 30,
+  },
 ];
 
 export const SCAN_TARGETS: ScanTarget[] = [

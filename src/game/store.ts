@@ -12,6 +12,7 @@ import {
 import { postToParent } from "@/lib/embed";
 import { passesCeiling, visibleObjectivesOf } from "./selectors";
 import { getAudio } from "./audio";
+import { hitStop } from "./feedback";
 import { detectTier, isQualityTier, lowerTier } from "./quality";
 import type { QualityTier } from "./quality";
 import type {
@@ -47,6 +48,16 @@ const LEGACY_SAVE_KEYS = [
 ];
 
 const AUTOSAVE_MS = 30000;
+
+/** Fictional hours in one Lupus Stella day — the ruler advanceTime() steps. */
+const HOURS_PER_DAY = 28;
+
+/**
+ * How long the collar auto-evac owns the screen, in ms. Doubles as
+ * flatline()'s idempotency window: a second flatline inside it is the same
+ * death, not a new one.
+ */
+const EVAC_FADE_MS = 3000;
 
 /** The three staff the "npcs" objective names out loud. */
 const REQUIRED_NPCS = ["thornhill", "castillo", "voss"];
@@ -268,6 +279,13 @@ type GameStore = {
   /** Highest stage reached per codex id; absent means stage 0 (base body). */
   codexStage: Record<string, number>;
   ending: Ending | null;
+  /**
+   * performance.now() timestamp until which the collar auto-evac holds.
+   * Presentation-transient: never written to the SaveBlob. Creatures.tsx
+   * reads it via getState() to send every predator to retreat; the death
+   * overlay renders its fade from the same field. 0 means no evac in flight.
+   */
+  evacUntil: number;
   playerPos: { x: number; y: number; z: number };
   playerYaw: number;
   playerSpeed: number;
@@ -326,6 +344,8 @@ type GameStore = {
   pushMessage: (msg: string) => void;
   setHealth: (h: number) => void;
   setStamina: (s: number) => void;
+  /** Idempotent death/evac: relocate home, patch vitals poorly, cost 2 h. */
+  flatline: () => void;
   setSignal: (s: number) => void;
   setCombat: (v: boolean) => void;
   recordFangKill: () => void;
@@ -355,6 +375,8 @@ type GameStore = {
   setInteract: (p: InteractPrompt) => void;
   setCompass: (b: number) => void;
   setTimeOfDay: (t: number) => void;
+  /** Advance the 28-hour clock by fictional hours, through setTimeOfDay. */
+  advanceTime: (hours: number) => void;
   setWeather: (w: WeatherKind, intensity?: number) => void;
   markStormSurvived: () => void;
   plantRidgeBeacon: () => void;
@@ -701,6 +723,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   flags: {},
   codexStage: {},
   ending: null,
+  evacUntil: 0,
   playerPos: { x: 0, y: 0, z: 40 },
   playerYaw: Math.PI,
   playerSpeed: 0,
@@ -949,6 +972,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setHealth: (health) => set({ health: Math.max(0, Math.min(100, health)) }),
   setStamina: (stamina) =>
     set({ stamina: Math.max(0, Math.min(100, stamina)) }),
+
+  /**
+   * Death is an evac, not a game over: the collar's dead-man loop yanks the
+   * operative home the moment vitals flatline. Idempotent inside the fade
+   * window so every damage source may call it without double-firing.
+   * `evacUntil` is presentation state, never persisted — Creatures sends
+   * predators to retreat off it and the overlay fades from it.
+   */
+  flatline: () => {
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    if (now < get().evacUntil) return;
+    const phase = get().phase;
+    if (phase !== "playing" && phase !== "ruins") return;
+    const spawn = get().ridgeBeaconPlanted ? SPAWNS.ridge7 : SPAWNS.colony;
+    set({
+      evacUntil: now + EVAC_FADE_MS,
+      playerPos: { x: spawn.x, y: 0, z: spawn.z },
+      playerYaw: spawn.yaw,
+      // The evac patches you, poorly.
+      health: 60,
+      stamina: 60,
+      interact: null,
+      trackedByFang: false,
+    });
+    get().pushMessage("VITALS FLATLINE — collar auto-evac engaged");
+    // The blackout costs time the planet keeps: two hours gone.
+    get().advanceTime(2);
+    get().pushMessage(
+      get().characterId === "theo"
+        ? "AVA — Nine seconds with no vitals on my board. The collar carried you home. Do not teach me what that feels like again."
+        : "NET — collar auto-evac complete. Vitals restored to field minimum. Resume tasking.",
+    );
+    // The controller owns its own transform and reads store.playerPos only at
+    // mount, so the store write alone cannot move the rig mid-run. It exposes
+    // a placement seam for exactly this; the store write above keeps saves,
+    // creatures and the map coherent whether or not the seam is mounted.
+    if (typeof window !== "undefined") {
+      const seam = (
+        window as unknown as {
+          __controlsTest?: {
+            teleport?: (x: number, z: number, yaw?: number) => void;
+          };
+        }
+      ).__controlsTest;
+      seam?.teleport?.(spawn.x, spawn.z, spawn.yaw);
+    }
+    get().persist();
+  },
   setSignal: (signalMeter) =>
     set({ signalMeter: Math.max(0, Math.min(1, signalMeter)) }),
   setCombat: (combatEnabled) => {
@@ -960,6 +1031,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   recordFangKill: () => {
+    // The kill-confirm grammar: one beat of frozen sim before the collapse.
+    hitStop(70);
     set({ fangKills: get().fangKills + 1 });
     get().pushMessage("CONTACT DOWN — shadowfang neutralized");
     get().persist();
@@ -1139,6 +1212,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lastHarvest: next,
       scannedIds: get().scannedIds.filter((id) => !due.includes(id)),
     });
+  },
+
+  /**
+   * Advance the 28-hour clock by fictional hours. Routed through
+   * setTimeOfDay — the one place world time moves — in sub-half-day steps,
+   * because its wrap heuristic reads any backward jump over half a day as
+   * midnight; worldDays and harvest regrowth accumulate exactly as if the
+   * hours had been walked.
+   */
+  advanceTime: (hours) => {
+    if (!Number.isFinite(hours) || hours <= 0) return;
+    let remaining = hours / HOURS_PER_DAY;
+    while (remaining > 0) {
+      const step = Math.min(remaining, 0.4);
+      remaining -= step;
+      get().setTimeOfDay((get().timeOfDay + step) % 1);
+    }
   },
 
   setWeather: (weather, intensity = 0.5) => {
@@ -1533,6 +1623,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       flags: {},
       codexStage: {},
       ending: null,
+      evacUntil: 0,
       playerPos: { x: 0, y: 0, z: 40 },
       playerYaw: Math.PI,
       playerSpeed: 0,

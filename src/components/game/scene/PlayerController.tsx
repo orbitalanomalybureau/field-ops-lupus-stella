@@ -6,11 +6,15 @@ import { WORLD } from "@/game/data";
 import { colliders, entitiesOfKind } from "@/game/entities";
 import {
   addMouseLook,
+  aimActive,
   attachKeyboard,
   consumeEdge,
   debugSetKeys,
+  setTouchAim,
   snapshot,
 } from "@/game/input";
+import { attackPoseActive, consumeKick } from "@/game/feedback";
+import { noiseLevel } from "@/game/noise";
 import {
   SLIDE_SLOPE,
   sampleHeight,
@@ -114,6 +118,12 @@ export function PlayerController() {
   const audioTick = useRef(0);
   const stepAcc = useRef(0);
   const wasPauseable = useRef(false);
+  /** 0..1 ease into the over-shoulder aim frame — no camera pops. */
+  const aimBlend = useRef(0);
+  /** Scratch target for consumeKick, allocated once. */
+  const kickOut = useRef({ x: 0, y: 0 });
+  /** Local latch so flatline() cannot double-fire across frames. */
+  const flatlined = useRef(false);
   /** Rolling frame times, so QA can assert a framerate floor. */
   const frameTimes = useRef<number[]>([]);
 
@@ -190,6 +200,9 @@ export function PlayerController() {
         s.setPlayerPos(g.position.x, g.position.y, g.position.z);
         s.setPlayerYaw(yaw.current);
       },
+      // Mouse aim requires pointer lock, which headless Chromium never
+      // grants, so QA raises the rifle through the touch-toggle path.
+      setAim: setTouchAim,
     };
 
     return () => {
@@ -233,6 +246,11 @@ export function PlayerController() {
       s.setCombat(!s.combatEnabled);
     }
 
+    // Aim is a held posture read from the input module, never a snapshot
+    // field. Only the field phases raise the rifle — menus and the epilogue
+    // must never inherit a shoulder camera from a stale toggle.
+    const aiming = aimActive() && (phase === "playing" || phase === "ruins");
+
     yaw.current -= input.lookX;
     pitch.current = THREE.MathUtils.clamp(
       pitch.current - input.lookY,
@@ -262,8 +280,13 @@ export function PlayerController() {
       if (standUp.current <= 0) sliding.current = false;
     }
 
+    // Aiming suppresses sprint: the rifle comes down or the legs slow.
     const wantSprint =
-      input.sprint && mz > 0 && staminaLocal.current > 2 && !sliding.current;
+      input.sprint &&
+      mz > 0 &&
+      staminaLocal.current > 2 &&
+      !sliding.current &&
+      !aiming;
 
     if (wantSprint) {
       staminaLocal.current = Math.max(0, staminaLocal.current - (18 * d) / stamMul);
@@ -272,7 +295,9 @@ export function PlayerController() {
     }
     useGameStore.getState().setStamina(staminaLocal.current);
 
-    const scanning = input.scan;
+    // Aim cancels the scanner and blocks it from starting: the two are
+    // competing postures, and the scan FOV must never fight the aim FOV.
+    const scanning = input.scan && !aiming;
     useGameStore.getState().setScanner(scanning);
 
     const weather = useGameStore.getState().weather;
@@ -291,8 +316,9 @@ export function PlayerController() {
         vel.current.setLength(SLIDE_MAX_SPEED);
       }
     } else {
+      // Aim-walk sits at the scan-walk rhythm: deliberate, not rooted.
       const base =
-        (wantSprint ? 11.5 : scanning ? 3.2 : 6.4) *
+        (wantSprint ? 11.5 : aiming ? 3.6 : scanning ? 3.2 : 6.4) *
         speedMul *
         weatherSlow *
         (inside ? 0.85 : 1) *
@@ -369,8 +395,12 @@ export function PlayerController() {
     }
     const bobY = Math.sin(bob.current) * Math.min(spd / 10, 1) * 0.06;
 
+    // Attack and aim outrank locomotion: a swing mid-stride still reads as a
+    // swing, and a raised rifle stays raised while strafing.
     let anim: AnimState = "idle";
-    if (sliding.current || !grounded.current) anim = "run";
+    if (attackPoseActive()) anim = "attack";
+    else if (aiming) anim = "aim";
+    else if (sliding.current || !grounded.current) anim = "run";
     else if (scanning) anim = "scan";
     else if (useGameStore.getState().combatEnabled && spd < 1) anim = "combat";
     else if (wantSprint && spd > 2) anim = "run";
@@ -380,12 +410,26 @@ export function PlayerController() {
     g.userData.anim = anim;
     useGameStore.getState().setPlayerMotion(spd, anim);
 
-    const lookDist = scanning ? 3.8 : 5.4;
+    // Over-shoulder frame, eased by its own blend: the camera target AND the
+    // look target shift together, so lookAt (which is not smoothed) can never
+    // snap the view when the rifle comes up or down.
+    aimBlend.current = THREE.MathUtils.lerp(
+      aimBlend.current,
+      aiming ? 1 : 0,
+      1 - Math.exp(-10 * d),
+    );
+    const shoulder = 0.65 * aimBlend.current;
+
+    const lookDist = THREE.MathUtils.lerp(
+      scanning ? 3.8 : 5.4,
+      2.6,
+      aimBlend.current,
+    );
     const height = scanning ? 1.85 : 2.25;
     desired.current.set(
-      g.position.x - forward.current.x * lookDist,
+      g.position.x - forward.current.x * lookDist + right.current.x * shoulder,
       g.position.y + height + bobY - pitch.current * 0.8,
-      g.position.z - forward.current.z * lookDist,
+      g.position.z - forward.current.z * lookDist + right.current.z * shoulder,
     );
 
     // Duck in front of whatever the chase camera would otherwise sit inside.
@@ -424,9 +468,9 @@ export function PlayerController() {
     if (desired.current.y < camGround) desired.current.y = camGround;
 
     lookTarget.current.set(
-      g.position.x + forward.current.x * 5,
+      g.position.x + forward.current.x * 5 + right.current.x * shoulder,
       g.position.y + 1.4 + pitch.current * 3.5 + bobY,
-      g.position.z + forward.current.z * 5,
+      g.position.z + forward.current.z * 5 + right.current.z * shoulder,
     );
 
     if (!booted.current) {
@@ -436,17 +480,30 @@ export function PlayerController() {
     }
     camPos.current.lerp(desired.current, 1 - Math.exp(-11 * d));
     camera.position.copy(camPos.current);
+    // Feedback spring: recoil and damage shove the camera off its smoothed
+    // position. Applied to the camera only — never camPos, or the spring
+    // would fight the lerp — and before lookAt, so the shove also reads as a
+    // small rotation. Hit-stop is NOT consumed here; Creatures owns its sim.
+    consumeKick(d, kickOut.current);
+    camera.position.x +=
+      right.current.x * kickOut.current.x +
+      forward.current.x * kickOut.current.y;
+    camera.position.z +=
+      right.current.z * kickOut.current.x +
+      forward.current.z * kickOut.current.y;
     camera.lookAt(lookTarget.current);
 
     const persp = camera as THREE.PerspectiveCamera;
     persp.fov = THREE.MathUtils.lerp(
       persp.fov,
-      scanning ? 48 : wantSprint ? 62 : 56,
+      aiming ? 44 : scanning ? 48 : wantSprint ? 62 : 56,
       1 - Math.exp(-6 * d),
     );
     persp.updateProjectionMatrix();
 
-    if (spd > 0.5) {
+    // Aiming pins the body to the muzzle line: strafing must not swing the
+    // torso away from where the reticle points.
+    if (spd > 0.5 && !aiming) {
       g.rotation.y = Math.atan2(vel.current.x, vel.current.z);
     } else {
       g.rotation.y = Math.atan2(forward.current.x, forward.current.z);
@@ -474,12 +531,30 @@ export function PlayerController() {
     );
     if (ruinD < 50) signal += (1 - ruinD / 50) * 0.55;
     if (weather === "storm") signal *= 0.55;
+    // The operative's own noise (gunfire ~0.6, decaying over ~6 s) rides on
+    // top AFTER the storm attenuation: a discharge must always visibly spike
+    // the ZPE SIG bar — that spike IS the social cost made legible.
+    signal += noiseLevel() * 0.5;
     store.setSignal(THREE.MathUtils.clamp(signal, 0, 1));
+
+    // Flatline: the one credibility line the planet holds. Locally latched so
+    // the evac sequence cannot be re-triggered while health sits at zero;
+    // the latch releases once flatline()'s recovery restores health.
+    if (store.health <= 0) {
+      if (!flatlined.current) {
+        flatlined.current = true;
+        store.flatline();
+      }
+    } else if (flatlined.current) {
+      flatlined.current = false;
+    }
 
     audioTick.current += d;
     if (audioTick.current > 0.25) {
       audioTick.current = 0;
       const a = getAudio();
+      // Spatial anchor for panned one-shots (thunderAt, the stalker bed).
+      a.updateListener(camPos.current.x, camPos.current.z, yaw.current);
       a.setOutdoor(THREE.MathUtils.clamp((g.position.z - 20) / 80, 0, 1));
       a.setTension(
         store.trackedByFang ? 0.85 : weather === "storm" ? 0.55 : signal * 0.4,

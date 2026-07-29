@@ -1,9 +1,23 @@
 import { useFrame } from "@react-three/fiber";
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { WORLD } from "@/game/data";
 import { getAudio } from "@/game/audio";
-import { consumeEdge } from "@/game/input";
+import {
+  aimActive,
+  consumeEdge,
+  lastDevice,
+  setAimFriction,
+} from "@/game/input";
+import type { Device } from "@/game/input";
+import {
+  emitAim,
+  flashAttackPose,
+  kick,
+  reportHitFrom,
+  throughHitStop,
+} from "@/game/feedback";
+import { noiseLevel, reportNoise } from "@/game/noise";
 import { passesCeiling } from "@/game/selectors";
 import { useGameStore } from "@/game/store";
 import type { CreatureRecord } from "@/game/store";
@@ -18,9 +32,16 @@ import { sampleHeight } from "@/game/worldHeight";
  * The behaviour numbers (48/stealth detect, 1.25 night, 1.2 storm, 0.55 scan
  * slowdown, 8 m flank offsets, 1600 ms / 0.45 learnedBias cadence, 4.4/2.2
  * speeds, 3.2 flee, 16/s contact, 8·combat shove) are the shipped tuning and
- * are preserved verbatim — this is a restructure plus additions, not a re-tune.
+ * are preserved verbatim — this is a restructure plus additions, not a
+ * re-tune. The one deliberate widening: the detect radius now scales with
+ * noiseLevel(), per the noise.ts contract — how loud you have recently been
+ * is part of how visible you are.
  *
- * This component is the sole consumer of the "attack" input edge.
+ * This component is the sole consumer of the "attack" input edge, branched on
+ * posture: aimed (aimActive) fires the pulse rifle — hitscan bolt, energy
+ * cells held as module transients, one reportNoise(0.6) broadcast per
+ * discharge — while the un-aimed edge keeps the shipped melee verbatim. It
+ * also owns aim telemetry (emitAim, ~10 Hz) and the aim-friction call.
  */
 
 type Kind = "prismhoof" | "shadowfang" | "scavenger";
@@ -73,6 +94,8 @@ type Agent = {
   quillHold: number;
   /** Eye flare decay after a player hit lands. */
   flash: number;
+  /** Seconds of forced detection left — a heard gunshot pins `detected`. */
+  alertT: number;
   preyIdx: number;
   feedT: number;
   /** Night-only spawns sleep by day unless a storm or the aggro flag wakes them. */
@@ -105,6 +128,58 @@ const LUNGE_WINDUP = 0.5;
 const SPECIMEN_SEC = 30;
 /** The coast pack is Book II terrain; below the ceiling it does not exist. */
 const BOOK2 = { book2: true } as const;
+
+/* ------------------------------- pulse rifle ------------------------------ */
+
+const MAX_CELLS = 5;
+/** Seconds per recharged cell — but only after CELL_REST_SEC without firing. */
+const CELL_RECHARGE_SEC = 1.4;
+const CELL_REST_SEC = 0.9;
+const SHOT_RANGE = 60;
+const SHOT_DAMAGE = 26;
+/** Past this range the bolt bleeds down toward SHOT_MIN_DAMAGE at 60 m. */
+const SHOT_FALLOFF_M = 35;
+const SHOT_MIN_DAMAGE = 15;
+/** Post-hit shove — a bolt staggers; it does not launch like a swing. */
+const SHOT_KNOCKBACK = 4;
+/** cos(accept half-angle) per device — aim assist is honesty about thumbs. */
+const SHOT_CONE_COS: Record<Device, number> = {
+  keyboard: Math.cos((4 * Math.PI) / 180),
+  gamepad: Math.cos((8 * Math.PI) / 180),
+  touch: Math.cos((12 * Math.PI) / 180),
+};
+/** Every discharge is a broadcast: base earshot; night carries it further,
+ * a storm cell swallows it — the same masking the signal meter respects. */
+const SHOT_EARSHOT = 70;
+const SHOT_EARSHOT_STORM = 45;
+/** Seconds a heard shot pins a predator's detection on. */
+const SHOT_ALERT_SEC = 20;
+/** Prismhoofs inside this radius stampede on any discharge. */
+const STAMPEDE_RADIUS = 50;
+/** Aim telemetry cadence — the HUD reticle's only feed (feedback.ts). */
+const AIM_EMIT_SEC = 0.1;
+const MUZZLE_SEC = 0.06;
+const TRACER_SEC = 0.08;
+const SPARK_SEC = 0.16;
+/** The bolt flies level at eye height — camera pitch never reaches the store. */
+const MUZZLE_HEIGHT = 1.45;
+
+/**
+ * Cell/ammo and scoreboard state: module transients by contract — never
+ * store state, never saved. The HUD reads them through AIM_EVENT only, so a
+ * shot cannot re-render a single React leaf.
+ */
+let cells = MAX_CELLS;
+let cellRechargeT = 0;
+let sinceShot = Infinity;
+let shotCount = 0;
+let shotHits = 0;
+let shotKills = 0;
+/** Once-per-session fiction latches (the store flag survives reloads). */
+let rifleLineShown = false;
+let picketLineShown = false;
+
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /** Park-Miller over a fixed seed — the repo's seeded-scatter pattern. */
 function makeRand(seed: number): () => number {
@@ -253,6 +328,20 @@ export function Creatures() {
   const attackCd = useRef(0);
   const memoryApplied = useRef(false);
   const routeCodexShown = useRef(false);
+  const muzzleRef = useRef<THREE.Mesh>(null);
+  const tracerRef = useRef<THREE.Mesh>(null);
+  const sparkRef = useRef<THREE.Mesh>(null);
+  /** Remaining life of each pooled discharge visual, seconds. */
+  const fxT = useRef({ muzzle: 0, tracer: 0, spark: 0 });
+  const aimEmitT = useRef(0);
+  /** Last evacUntil acted on, so a collar evac routs predators exactly once. */
+  const evacSeen = useRef(0);
+  /** Damage-taken feedback throttle (hurt grunt, kick, HUD arc), ms. */
+  const hurtAt = useRef(0);
+
+  // Aim friction must not outlive the scene — a stuck 0.55x look sensitivity
+  // would follow the player into menus.
+  useEffect(() => () => setAimFriction(false), []);
 
   const count = useMemo(() => {
     const master = makeRand(90210);
@@ -302,6 +391,7 @@ export function Creatures() {
         quillTaken: false,
         quillHold: 0,
         flash: 0,
+        alertT: 0,
         preyIdx: -1,
         feedT: 0,
         nocturnal,
@@ -342,8 +432,11 @@ export function Creatures() {
     });
   }, [count]);
 
-  useFrame((_, delta) => {
-    const d = Math.min(delta, 0.05);
+  useFrame((frameState, delta) => {
+    // Hit-stop freezes the creature sim (the kill-confirm beat) but not the
+    // camera — PlayerController deliberately does not consume it. Clamped
+    // after, so the frame following a stop cannot arrive as a spike.
+    const d = Math.min(throughHitStop(delta), 0.05);
     const store = useGameStore.getState();
     // Sole consumer of the attack edge (see input.ts). Drained even while
     // paused so a press inside a menu cannot fire on resume.
@@ -366,6 +459,28 @@ export function Creatures() {
     const nightBoost = night ? 1.25 : 1;
     const stormBoost = weather === "storm" ? 1.2 : 1;
     const boost = nightBoost * stormBoost;
+    // How loud the operative has recently been widens every predator's world
+    // (noise.ts contract) — the shot itself decays out of this over ~6 s.
+    const noiseBoost = 1 + noiseLevel() * 0.5;
+
+    // ---- Collar auto-evac: the death state empties the field. ----
+    const nowMs = performance.now();
+    const evacActive = store.evacUntil > nowMs;
+    if (store.evacUntil !== evacSeen.current) {
+      evacSeen.current = store.evacUntil;
+      if (evacActive) {
+        // Every predator breaks off when the collar fires — the planet
+        // watched the evac too. Forced detection ends with the hunt.
+        for (let i = PRED_START; i < COUNT; i++) {
+          const a = agents.current[i];
+          a.alertT = 0;
+          if (a.state !== "dead" && !a.dormant) {
+            a.preyIdx = -1;
+            setState(a, "retreat");
+          }
+        }
+      }
+    }
 
     // "The planet remembers you": restore pack knowledge once, after hydrate.
     if (!memoryApplied.current) {
@@ -417,35 +532,256 @@ export function Creatures() {
       store.unlockCodex("route-learning");
     };
 
-    // ---- Player attack: one swing per edge, nearest fang in the cone. ----
-    attackCd.current = Math.max(0, attackCd.current - d);
-    if (attackEdge && combat && inMission && attackCd.current <= 0) {
-      attackCd.current = ATTACK_COOLDOWN;
-      const fx = -Math.sin(store.playerYaw);
-      const fz = -Math.cos(store.playerYaw);
-      let best: Agent | null = null;
-      let bestD = ATTACK_RANGE;
-      for (let i = PRED_START; i < COUNT; i++) {
-        const a = agents.current[i];
-        if (a.state === "dead" || a.dormant) continue;
-        if (a.kind === "scavenger" && !scavAllowed) continue;
-        const tx = a.pos.x - player.x;
-        const tz = a.pos.z - player.z;
-        const td = Math.hypot(tx, tz);
-        if (td > bestD || td < 1e-4) continue;
-        if ((tx / td) * fx + (tz / td) * fz < ATTACK_CONE) continue;
-        best = a;
-        bestD = td;
+    // ---- Energy cells: recharge only after a beat of not firing. ----
+    sinceShot += d;
+    if (cells < MAX_CELLS && sinceShot >= CELL_REST_SEC) {
+      cellRechargeT += d;
+      if (cellRechargeT >= CELL_RECHARGE_SEC) {
+        cellRechargeT -= CELL_RECHARGE_SEC;
+        cells += 1;
+        getAudio().cellTick();
       }
-      if (best) {
-        best.health -= ATTACK_DAMAGE * combatMul;
-        V_A.set(best.pos.x - player.x, 0, best.pos.z - player.z)
-          .normalize()
-          .multiplyScalar(8 * combatMul);
-        best.vel.add(V_A);
-        best.flash = 0.35;
-        getAudio().pulseInteract();
-        if (best.health <= 0) killPredator(best);
+    }
+
+    // ---- Player attack: sole consumer of the edge, branched on posture.
+    // Aimed (aimActive) fires the pulse rifle — the raised rifle IS the
+    // armed state, so it needs no combat stance; the un-aimed edge keeps the
+    // shipped melee verbatim, combat-gated as always. Shared cooldown.
+    attackCd.current = Math.max(0, attackCd.current - d);
+    const meleeSwing = !aimActive();
+    if (
+      attackEdge &&
+      inMission &&
+      attackCd.current <= 0 &&
+      !evacActive &&
+      (combat || !meleeSwing)
+    ) {
+      attackCd.current = ATTACK_COOLDOWN;
+      const fwdX = -Math.sin(store.playerYaw);
+      const fwdZ = -Math.cos(store.playerYaw);
+      if (meleeSwing) {
+        // Melee: one swing per edge, nearest fang in the cone (shipped).
+        flashAttackPose();
+        let best: Agent | null = null;
+        let bestD = ATTACK_RANGE;
+        for (let i = PRED_START; i < COUNT; i++) {
+          const a = agents.current[i];
+          if (a.state === "dead" || a.dormant) continue;
+          if (a.kind === "scavenger" && !scavAllowed) continue;
+          const tx = a.pos.x - player.x;
+          const tz = a.pos.z - player.z;
+          const td = Math.hypot(tx, tz);
+          if (td > bestD || td < 1e-4) continue;
+          if ((tx / td) * fwdX + (tz / td) * fwdZ < ATTACK_CONE) continue;
+          best = a;
+          bestD = td;
+        }
+        if (best) {
+          best.health -= ATTACK_DAMAGE * combatMul;
+          V_A.set(best.pos.x - player.x, 0, best.pos.z - player.z)
+            .normalize()
+            .multiplyScalar(8 * combatMul);
+          best.vel.add(V_A);
+          best.flash = 0.35;
+          getAudio().pulseInteract();
+          if (best.health <= 0) killPredator(best);
+        }
+      } else if (cells <= 0) {
+        getAudio().dryFire();
+      } else {
+        // -------- FIRE: hold-to-aim hitscan bolt. --------
+        cells -= 1;
+        sinceShot = 0;
+        cellRechargeT = 0;
+        shotCount += 1;
+        flashAttackPose(160);
+        reportNoise(0.6);
+        getAudio().shot();
+
+        // First discharge of a run: the quiet-protocol theme, mechanized.
+        // The store flag survives reload so the line never replays.
+        if (!rifleLineShown) {
+          rifleLineShown = true;
+          if (!store.flags["rifle-discharged"]) {
+            store.raiseFlag("rifle-discharged");
+            store.pushMessage(
+              "NET — every discharge is a broadcast, Operative.",
+            );
+            // Graceful no-op until the codex entry ships in data.ts.
+            store.unlockCodex("pulse-rifle");
+          }
+        }
+
+        // The camera pitch never reaches the store, so the bolt flies level
+        // at eye height along the player yaw — the same cone math as the
+        // melee swing with a marksman's accept angle. A short terrain march
+        // caps the ray, so a hill soaks the bolt and the tracer always ends
+        // somewhere real.
+        const ox = player.x;
+        const oy = player.y + MUZZLE_HEIGHT;
+        const oz = player.z;
+        let impactT = SHOT_RANGE;
+        for (let t = 4; t <= SHOT_RANGE; t += 2) {
+          if (sampleHeight(ox + fwdX * t, oz + fwdZ * t) >= oy) {
+            impactT = t;
+            break;
+          }
+        }
+
+        // Nearest live body in the accept cone wins; terrain occludes.
+        const coneCos = SHOT_CONE_COS[lastDevice()];
+        let target: Agent | null = null;
+        let targetD = impactT;
+        for (let i = 0; i < COUNT; i++) {
+          const a = agents.current[i];
+          if (a.state === "dead" || a.dormant) continue;
+          if (a.kind === "scavenger" && !scavAllowed) continue;
+          const tx = a.pos.x - player.x;
+          const tz = a.pos.z - player.z;
+          const td = Math.hypot(tx, tz);
+          if (td > targetD || td < 1e-4) continue;
+          if ((tx / td) * fwdX + (tz / td) * fwdZ < coneCos) continue;
+          target = a;
+          targetD = td;
+        }
+
+        // Tracer endpoint: the body hit, or the ground the march found.
+        let ex: number;
+        let ey: number;
+        let ez: number;
+        if (target) {
+          ex = target.pos.x;
+          ey = target.pos.y + 0.6;
+          ez = target.pos.z;
+        } else {
+          ex = ox + fwdX * impactT;
+          ez = oz + fwdZ * impactT;
+          ey = impactT < SHOT_RANGE ? sampleHeight(ex, ez) + 0.08 : oy;
+        }
+
+        if (target && target.kind === "prismhoof") {
+          // A shot prismhoof stampedes the herd and drops nothing — the
+          // planet gives the trigger-happy no economy at all.
+          target.flash = 0.35;
+          for (let hi = 0; hi < HERD_COUNT; hi++) {
+            const h = agents.current[hi];
+            if (h.state !== "dead") setState(h, "flee");
+          }
+        } else if (target) {
+          const wasAmbush = target.state === "ambush";
+          const wasWindup = target.state === "lunge" && target.windup > 0;
+          // 26 base; combat mods count at half weight — glass is not a
+          // discipline — bleeding toward 15 past 35 m.
+          const falloff =
+            targetD <= SHOT_FALLOFF_M
+              ? SHOT_DAMAGE
+              : THREE.MathUtils.lerp(
+                  SHOT_DAMAGE,
+                  SHOT_MIN_DAMAGE,
+                  (targetD - SHOT_FALLOFF_M) / (SHOT_RANGE - SHOT_FALLOFF_M),
+                );
+          target.health -= falloff * (1 + (combatMul - 1) * 0.5);
+          // The shipped hit pipeline: shove, eye flare, then the same
+          // retreat/collapse/specimen/respawn path as the melee swing.
+          V_A.set(target.pos.x - player.x, 0, target.pos.z - player.z)
+            .normalize()
+            .multiplyScalar(SHOT_KNOCKBACK);
+          target.vel.add(V_A);
+          target.flash = 0.35;
+          shotHits += 1;
+          kick(0.35);
+          getAudio().hitConfirm();
+          if (wasWindup) {
+            // Lunge cancel: a bolt in the telegraph window reads the animal
+            // and un-writes the pounce — aiming as a skill of reading.
+            target.windup = 0;
+            target.lungeT = 0;
+            target.lungeCd = 2.2;
+            setState(target, "flank");
+          }
+          if (target.health <= 0) {
+            killPredator(target);
+            shotKills += 1;
+            getAudio().killThunk();
+            if (wasAmbush) {
+              // Picket re-learn: kill a waiting fang from range and the
+              // survivors move the ambush — they learn that you learned.
+              for (let pi = PRED_START; pi < COUNT; pi++) {
+                const p = agents.current[pi];
+                if (p === target || p.kind !== target.kind) continue;
+                if (p.state === "dead") continue;
+                const ang = p.rand() * Math.PI * 2;
+                const r = 10 + p.rand() * 6;
+                V_B.set(
+                  p.learnedBias.x + Math.cos(ang) * r,
+                  0,
+                  p.learnedBias.z + Math.sin(ang) * r,
+                );
+                p.learnedBias.lerp(V_B, 0.5);
+              }
+              if (!picketLineShown) {
+                picketLineShown = true;
+                store.pushMessage("NET — pack dispersal pattern shifted");
+              }
+            }
+          }
+        }
+
+        // Every discharge is a broadcast: forced detection inside earshot,
+        // never touching packsAggroed — one loud hunt is not the Broadcast.
+        const earshot =
+          weather === "storm"
+            ? SHOT_EARSHOT_STORM
+            : SHOT_EARSHOT * nightBoost;
+        for (let pi = PRED_START; pi < COUNT; pi++) {
+          const p = agents.current[pi];
+          if (p.state === "dead" || p.dormant) continue;
+          if (p.kind === "scavenger" && !scavAllowed) continue;
+          if (Math.hypot(p.pos.x - player.x, p.pos.z - player.z) > earshot) {
+            continue;
+          }
+          p.alertT = Math.max(p.alertT, SHOT_ALERT_SEC);
+          if (
+            p.state === "prowl" ||
+            p.state === "ambush" ||
+            p.state === "feed"
+          ) {
+            p.preyIdx = -1;
+            setState(p, "stalk");
+          }
+        }
+        for (let hi = 0; hi < HERD_COUNT; hi++) {
+          const h = agents.current[hi];
+          if (h.state === "dead" || h.state === "flee") continue;
+          if (
+            Math.hypot(h.pos.x - player.x, h.pos.z - player.z) <
+            STAMPEDE_RADIUS
+          ) {
+            setState(h, "flee");
+          }
+        }
+
+        // Arm the pooled discharge visuals; the render section below fades
+        // them. Deterministic — no Math.random anywhere in this path.
+        const muzzle = muzzleRef.current;
+        if (muzzle) {
+          muzzle.position.set(ox + fwdX * 0.9, oy - 0.05, oz + fwdZ * 0.9);
+          fxT.current.muzzle = MUZZLE_SEC;
+        }
+        const tracer = tracerRef.current;
+        if (tracer) {
+          V_A.set(ex - ox, ey - oy, ez - oz);
+          const len = Math.max(V_A.length(), 0.1);
+          tracer.position.set((ox + ex) / 2, (oy + ey) / 2, (oz + ez) / 2);
+          tracer.quaternion.setFromUnitVectors(Y_AXIS, V_A.normalize());
+          tracer.scale.set(1, len, 1);
+          fxT.current.tracer = TRACER_SEC;
+        }
+        const spark = sparkRef.current;
+        if (spark) {
+          spark.position.set(ex, ey, ez);
+          fxT.current.spark = SPARK_SEC;
+        }
       }
     }
 
@@ -533,6 +869,7 @@ export function Creatures() {
           a.health = 100;
           a.collapseK = 0;
           a.deadT = 0;
+          a.alertT = 0;
           setState(a, a.kind === "prismhoof" ? "graze" : "prowl");
           if (a.kind !== "prismhoof" && dist < 80) {
             store.pushMessage("RECON — new fang signature on the mesh");
@@ -641,10 +978,13 @@ export function Creatures() {
           }
         } else {
           // ---------------- Predators ----------------
-          const detect = (48 / stealth) * nightBoost * stormBoost;
-          const detected = aggro || dist < detect;
+          // Shipped radius, widened by recent loudness; a heard gunshot
+          // (alertT) forces detection outright for its window.
+          const detect = (48 / stealth) * nightBoost * stormBoost * noiseBoost;
+          const detected = aggro || a.alertT > 0 || dist < detect;
           const biasSet = a.learnedBias.lengthSq() > 1;
           a.lungeCd = Math.max(0, a.lungeCd - d);
+          a.alertT = Math.max(0, a.alertT - d);
 
           if (a.health < 30 && a.state !== "retreat") setState(a, "retreat");
 
@@ -837,8 +1177,9 @@ export function Creatures() {
           }
 
           // Contact — shipped numbers: an armed stance shoves the fang off,
-          // an unarmed operative bleeds 16/s.
-          if (dist < 2.4) {
+          // an unarmed operative bleeds 16/s. The evac window is a grace
+          // period: a routed pack cannot chew on the fade-out.
+          if (dist < 2.4 && !evacActive) {
             if (combat) {
               V_A.set(-dx, 0, -dz);
               if (V_A.lengthSq() > 1e-6) {
@@ -846,6 +1187,21 @@ export function Creatures() {
               }
             } else {
               store.setHealth(store.health - 16 * d);
+              // Diegetic damage grammar: a directional camera shove, the
+              // HUD arc's bearing, one throttled grunt — no numbers.
+              if (nowMs - hurtAt.current > 700) {
+                hurtAt.current = nowMs;
+                const bearing = Math.atan2(
+                  a.pos.x - player.x,
+                  a.pos.z - player.z,
+                );
+                reportHitFrom(bearing);
+                kick(0.5, bearing);
+                getAudio().hurt();
+              }
+              if (useGameStore.getState().health <= 0) {
+                useGameStore.getState().flatline();
+              }
             }
           }
 
@@ -936,6 +1292,76 @@ export function Creatures() {
       }
     }
 
+    // ---- Aim telemetry (~10 Hz): the HUD reticle's only feed. ----
+    aimEmitT.current += d;
+    if (aimEmitT.current >= AIM_EMIT_SEC) {
+      aimEmitT.current = 0;
+      const aiming = aimActive();
+      const coneCos = SHOT_CONE_COS[lastDevice()];
+      const fwdX = -Math.sin(store.playerYaw);
+      const fwdZ = -Math.cos(store.playerYaw);
+      let hot = false;
+      for (let i = PRED_START; i < COUNT; i++) {
+        const a = agents.current[i];
+        if (a.state === "dead" || a.dormant) continue;
+        if (a.kind === "scavenger" && !scavAllowed) continue;
+        const tx = a.pos.x - player.x;
+        const tz = a.pos.z - player.z;
+        const td = Math.hypot(tx, tz);
+        if (td < 1e-4 || td > SHOT_RANGE) continue;
+        if ((tx / td) * fwdX + (tz / td) * fwdZ >= coneCos) {
+          hot = true;
+          break;
+        }
+      }
+      // Reticle on a live predator slows the look — assist, not autoaim.
+      setAimFriction(hot && aiming);
+      emitAim({
+        aiming,
+        cells,
+        maxCells: MAX_CELLS,
+        hot,
+        hits: shotHits,
+        kills: shotKills,
+      });
+    }
+
+    // ---- Discharge FX pool: fixed meshes, timers, opacity — no churn. ----
+    const fx = fxT.current;
+    const muzzle = muzzleRef.current;
+    if (muzzle) {
+      fx.muzzle = Math.max(0, fx.muzzle - d);
+      muzzle.visible = fx.muzzle > 0;
+      if (muzzle.visible) {
+        // Billboard with a deterministic per-shot roll — never Math.random.
+        muzzle.quaternion.copy(frameState.camera.quaternion);
+        muzzle.rotateZ(shotCount * 2.4);
+        (muzzle.material as THREE.MeshStandardMaterial).opacity =
+          0.9 * (fx.muzzle / MUZZLE_SEC);
+      }
+    }
+    const tracer = tracerRef.current;
+    if (tracer) {
+      fx.tracer = Math.max(0, fx.tracer - d);
+      tracer.visible = fx.tracer > 0;
+      if (tracer.visible) {
+        (tracer.material as THREE.MeshStandardMaterial).opacity =
+          0.85 * (fx.tracer / TRACER_SEC);
+      }
+    }
+    const spark = sparkRef.current;
+    if (spark) {
+      fx.spark = Math.max(0, fx.spark - d);
+      spark.visible = fx.spark > 0;
+      if (spark.visible) {
+        // Scale-pop out, opacity down — a spend, not an explosion.
+        const k = 1 - fx.spark / SPARK_SEC;
+        spark.scale.setScalar(0.1 + k * 0.38);
+        (spark.material as THREE.MeshStandardMaterial).opacity =
+          0.9 * (fx.spark / SPARK_SEC);
+      }
+    }
+
     // Pack knowledge into the store at low cadence; autosave flushes it.
     saveTimer.current += d;
     if (saveTimer.current > 2.5) {
@@ -986,6 +1412,49 @@ export function Creatures() {
           </mesh>
         ))}
       </group>
+      {/* Pulse-rifle discharge pool: muzzle quad, tracer bolt, impact spark.
+          Emissive only — never a light, never a shadow; the frame loop owns
+          the timers and opacity does the fading. */}
+      <mesh ref={muzzleRef} visible={false}>
+        <planeGeometry args={[0.55, 0.55]} />
+        <meshStandardMaterial
+          color="#dceeff"
+          emissive="#9fd4ff"
+          emissiveIntensity={4}
+          transparent
+          opacity={0}
+          toneMapped={false}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <mesh ref={tracerRef} visible={false}>
+        <cylinderGeometry args={[0.022, 0.022, 1, 6]} />
+        <meshStandardMaterial
+          color="#cfe6ff"
+          emissive="#7fc0ff"
+          emissiveIntensity={3.4}
+          transparent
+          opacity={0}
+          toneMapped={false}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </mesh>
+      <mesh ref={sparkRef} visible={false}>
+        <octahedronGeometry args={[1, 0]} />
+        <meshStandardMaterial
+          color="#ffe0b0"
+          emissive="#ffb45e"
+          emissiveIntensity={3}
+          transparent
+          opacity={0}
+          toneMapped={false}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </mesh>
     </group>
   );
 }

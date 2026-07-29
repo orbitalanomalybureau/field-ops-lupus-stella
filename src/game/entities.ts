@@ -53,7 +53,18 @@ function npc(id: string, x: number, z: number, book2?: boolean): WorldEntity {
 }
 
 export const ENTITIES: WorldEntity[] = [
-  dome("dome-command", 0, 6),
+  // The command dome is the one shell the player can occupy, so it is the one
+  // dome carrying an interact: InteractionSystem anchors the exit prompt on
+  // the shell centre while insideDome. Without this row's interact the exit
+  // branch returned early and the ops floor had no way out.
+  {
+    id: "dome-command",
+    x: 0,
+    z: 6,
+    kind: "dome",
+    collider: { x: 0, z: 6, radius: DOME_SHELL },
+    interact: { label: "Exit command dome", radius: PICK_RADIUS },
+  },
   dome("dome-west", -14, 2),
   dome("dome-east", 14, 4),
   dome("dome-south-west", -8, 18),
@@ -67,6 +78,18 @@ export const ENTITIES: WorldEntity[] = [
     z: 8,
     kind: "prop",
     interact: { label: "Enter command dome", radius: PICK_RADIUS },
+  },
+
+  // THE bunk on the ops floor: dome centre (0, 6) plus the offset the western
+  // bunk is drawn at inside CommandDomeInterior (-2, -2.05). The row is always
+  // in the registry, but InteractionSystem only considers it while insideDome,
+  // so the prompt cannot leak through the shell to a player on the apron.
+  {
+    id: "dome-bunk",
+    x: -2,
+    z: 3.95,
+    kind: "prop",
+    interact: { label: "Rest", radius: PICK_RADIUS },
   },
 
   {

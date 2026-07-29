@@ -254,9 +254,65 @@ function FieldOpsAppInner({ embed = false, skipBoot = false }: Props) {
       {phase === "ruins" && !photoMode && <RuinModal />}
       {phase === "complete" && <CompleteScreen />}
 
+      {inWorld && <FlatlineOverlay />}
+
       {!embed && !photoMode && <div className="terminal-scan absolute inset-0 z-50 opacity-30" />}
 
       {inserting && <InsertionTransition ready={Boolean(GameCanvas)} onDone={endInsertion} />}
+    </div>
+  );
+}
+
+/** The overlay reads the same clock flatline() writes with. */
+function evacNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : 0;
+}
+
+/**
+ * Death is an evacuation, not a game-over screen. While store.evacUntil (a
+ * performance.now()-based deadline set once per death by flatline()) is in
+ * the future, the collar has already pulled the operative out and this
+ * overlay blacks the world while the respawn happens under it — diegetic,
+ * non-interactive, self-clearing. A leaf: it subscribes only to evacUntil, a
+ * number that moves once per death, and runs a coarse local clock only while
+ * the window is open, so nothing else in the app re-renders for a death.
+ */
+function FlatlineOverlay() {
+  const evacUntil = useGameStore((s) => s.evacUntil);
+  const [now, setNow] = useState(() => evacNow());
+
+  useEffect(() => {
+    if (evacUntil <= evacNow()) return;
+    setNow(evacNow());
+    const id = window.setInterval(() => {
+      const t = evacNow();
+      setNow(t);
+      // Self-arrest after the window lapses; otherwise this ticks (and
+      // re-renders a null leaf) until the next death.
+      if (t >= evacUntil) window.clearInterval(id);
+    }, 200);
+    return () => window.clearInterval(id);
+  }, [evacUntil]);
+
+  if (evacUntil <= now) return null;
+  // Fully black through the hold; the world fades back in over the final
+  // second as the deadline lapses.
+  const opacity = Math.min(1, (evacUntil - now) / 1000);
+  return (
+    <div
+      role="status"
+      aria-live="assertive"
+      className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center bg-void transition-opacity duration-200"
+      style={{ opacity }}
+    >
+      <div className="text-center font-mono">
+        <p className="text-[11px] tracking-[0.35em] text-danger">
+          VITALS FLATLINE — COLLAR AUTO-EVAC
+        </p>
+        <p className="mt-2 text-xs text-muted">
+          OPERATIVE RECOVERED — FIELD LOG INTACT
+        </p>
+      </div>
     </div>
   );
 }

@@ -170,9 +170,10 @@ export function useWeatherSim() {
         strike.y = 40;
         strike.z = 40 + rand() * 80;
         nextStrike.current = 2 + rand() * 5;
+        // Placed thunder: the sim already knows where the bolt landed, so the
+        // report now comes from that direction (mono fallback inside audio).
+        getAudio().thunderAt(strike.x, strike.z);
         const p = store.playerPos;
-        const range = Math.hypot(p.x - strike.x, p.z - strike.z);
-        getAudio().thunder(Math.max(0, 1 - range / 260));
         // Exposed-ridge rule, unchanged: altitude west of the spine bleeds.
         if (p.x < -80 && p.y > 8) {
           useGameStore.getState().setHealth(useGameStore.getState().health - 2);

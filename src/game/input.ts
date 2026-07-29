@@ -109,6 +109,26 @@ let invertY = false;
 let padIndex: number | null = null;
 let padAttackWas = false;
 
+/* --------------------------------- aim ---------------------------------- */
+// Aim is a held POSTURE, not an edge, and deliberately not a snapshot field:
+// snapshot() is consumed exactly once per frame by PlayerController, while
+// Creatures and the HUD also need to know the aim state. A non-consuming
+// query has no ownership problem; an edge or snapshot field would.
+
+/** RMB held — only ever set while pointer lock was held at press time. */
+let mouseAim = false;
+/** Gamepad LT (buttons[6]) held, refreshed by pollGamepad each snapshot. */
+let padAim = false;
+/** Touch TOGGLE, owned by MobileControls via setTouchAim. */
+let touchAim = false;
+/** Aim-assist friction — Creatures flips it near a live predator. */
+let aimFrictionOn = false;
+const AIM_FRICTION = 0.55;
+
+function lookScale(): number {
+  return aimFrictionOn ? AIM_FRICTION : 1;
+}
+
 const touch: TouchState = {
   moveX: 0,
   moveZ: 0,
@@ -193,23 +213,65 @@ export function pressAction(action: Action): void {
 }
 
 /**
+ * True while the operative is holding the aim posture: RMB under pointer
+ * lock, gamepad LT, or the touch aim toggle. Non-consuming — callable from
+ * anywhere, any number of times per frame.
+ *
+ * The pointer-lock check lives here rather than only at press time so a lost
+ * lock (Escape, overlay, alt-tab) drops mouse aim the same frame instead of
+ * leaving the rifle raised with no way to lower it.
+ */
+export function aimActive(): boolean {
+  const lockHeld =
+    typeof document !== "undefined" && document.pointerLockElement !== null;
+  return (mouseAim && lockHeld) || padAim || touchAim;
+}
+
+/**
+ * Aim-assist friction. Creatures calls this with "reticle within ~6 degrees
+ * of a live predator"; while active, all look input runs at 55% sensitivity
+ * so sticks and thumbs can settle on the target.
+ */
+export function setAimFriction(active: boolean): void {
+  aimFrictionOn = active;
+}
+
+/**
+ * Touch aim is a TOGGLE, not a hold — a thumb cannot hold aim and drag to
+ * look at once. MobileControls owns the button and its visual state; it
+ * survives clearHeld() because the player set it deliberately and blur/pause
+ * must not silently desync the module from the button.
+ */
+export function setTouchAim(on: boolean): void {
+  touchAim = on;
+  device = "touch";
+}
+
+/**
  * Mouse look. Kept separate from touch so sensitivity can differ per device
  * without the controller knowing which is active.
  */
 export function addMouseLook(dx: number, dy: number): void {
-  lookX += dx * 0.002 * sensitivity;
-  lookY += dy * 0.0017 * sensitivity * (invertY ? -1 : 1);
+  lookX += dx * 0.002 * sensitivity * lookScale();
+  lookY += dy * 0.0017 * sensitivity * (invertY ? -1 : 1) * lookScale();
   device = "keyboard";
 }
 
 function pollGamepad(): { moveX: number; moveZ: number } | null {
-  if (typeof navigator === "undefined" || !navigator.getGamepads) return null;
+  if (typeof navigator === "undefined" || !navigator.getGamepads) {
+    padAim = false;
+    return null;
+  }
   const pads = navigator.getGamepads();
   const pad =
     (padIndex !== null ? pads[padIndex] : null) ??
     pads.find((p) => p?.connected) ??
     null;
-  if (!pad) return null;
+  if (!pad) {
+    // A disconnected pad must not leave the rifle raised forever.
+    padAim = false;
+    return null;
+  }
   padIndex = pad.index;
 
   const dead = (v: number) => (Math.abs(v) < 0.18 ? 0 : v);
@@ -219,8 +281,11 @@ function pollGamepad(): { moveX: number; moveZ: number } | null {
   const ry = dead(pad.axes[3] ?? 0);
 
   if (lx || ly || rx || ry) device = "gamepad";
-  lookX += rx * 0.045 * sensitivity;
-  lookY += ry * 0.035 * sensitivity * (invertY ? -1 : 1);
+  lookX += rx * 0.045 * sensitivity * lookScale();
+  lookY += ry * 0.035 * sensitivity * (invertY ? -1 : 1) * lookScale();
+
+  // LT (button 6) is the aim hold — a held state, not an edge.
+  padAim = pad.buttons[6]?.pressed ?? false;
 
   // A / X / RB in the standard mapping.
   if (pad.buttons[0]?.pressed) edgePending.add("jump");
@@ -267,9 +332,12 @@ export function snapshot(): InputSnapshot {
     moveZ /= len;
   }
 
-  const outLookX = lookX + touch.lookX * 0.0032 * sensitivity;
+  // Touch look converts at consumption time, so friction applies here; the
+  // mouse/gamepad paths already applied it when they accumulated.
+  const outLookX = lookX + touch.lookX * 0.0032 * sensitivity * lookScale();
   const outLookY =
-    lookY + touch.lookY * 0.0028 * sensitivity * (invertY ? -1 : 1);
+    lookY +
+    touch.lookY * 0.0028 * sensitivity * (invertY ? -1 : 1) * lookScale();
   lookX = 0;
   lookY = 0;
   touch.lookX = 0;
@@ -298,6 +366,10 @@ export function clearHeld(): void {
   touch.lookY = 0;
   touch.sprint = false;
   touch.scan = false;
+  // Held aim drops with everything else; the touch aim TOGGLE deliberately
+  // does not — MobileControls owns that button's state (see setTouchAim).
+  mouseAim = false;
+  padAim = false;
 }
 
 /** Attach the window listeners. Returns a cleanup function. */
@@ -317,20 +389,36 @@ export function attachKeyboard(): () => void {
   };
   const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
 
-  // Mouse attack. Wired here rather than through a second attach function so
-  // PlayerController stays the input module's only mount point. Primary
-  // button only, and only while pointer lock is held — an unlocked click is
-  // UI, or the very click that acquires the lock, never a swing. Creatures.tsx
-  // is the sole consumer of this edge.
+  // Mouse combat buttons. Wired here rather than through a second attach
+  // function so PlayerController stays the input module's only mount point.
+  // Both only while pointer lock is held — an unlocked click is UI, or the
+  // very click that acquires the lock, never a swing or a shoulder-raise.
+  // Button 0 is the attack edge (Creatures.tsx is its sole consumer);
+  // button 2 is the aim HOLD, released on pointerup or lock loss.
   const onPointerDown = (e: PointerEvent) => {
-    if (e.button !== 0 || !document.pointerLockElement) return;
-    device = "keyboard";
-    edgePending.add("attack");
+    if (!document.pointerLockElement) return;
+    if (e.button === 0) {
+      device = "keyboard";
+      edgePending.add("attack");
+    } else if (e.button === 2) {
+      device = "keyboard";
+      mouseAim = true;
+    }
+  };
+  const onPointerUp = (e: PointerEvent) => {
+    if (e.button === 2) mouseAim = false;
+  };
+  // Right mouse is the aim hold; the browser menu would steal the button
+  // mid-fight. Unlocked right-clicks stay ordinary UI.
+  const onContextMenu = (e: MouseEvent) => {
+    if (document.pointerLockElement || mouseAim) e.preventDefault();
   };
 
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("pointerdown", onPointerDown);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("contextmenu", onContextMenu);
   window.addEventListener("blur", clearHeld);
   document.addEventListener("visibilitychange", clearHeld);
 
@@ -338,6 +426,8 @@ export function attachKeyboard(): () => void {
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
     window.removeEventListener("pointerdown", onPointerDown);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("contextmenu", onContextMenu);
     window.removeEventListener("blur", clearHeld);
     document.removeEventListener("visibilitychange", clearHeld);
   };

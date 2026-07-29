@@ -48,10 +48,13 @@ export function CommandDomeInterior() {
           never cast shadows — the sun's 2048 map does not reach in here and
           casters are a budget. */}
       {/* Kept inside r 2.9 so a rotated corner (half-diagonal ~1.04) cannot
-          poke past the 4 m floor disc. */}
+          poke past the 4 m floor disc. The western bunk is THE bunk — the
+          dome-bunk registry row anchors the Rest prompt on it, so it reads
+          made-up: blanket tint, a folded spare at the foot, and an emissive
+          watch-rotation tag (emissive only — the interior adds no lights). */}
       {[
-        { x: -2, z: -2.05, rot: 0.6 },
-        { x: 2, z: -2.05, rot: -0.6 },
+        { x: -2, z: -2.05, rot: 0.6, rest: true },
+        { x: 2, z: -2.05, rot: -0.6, rest: false },
       ].map((b, i) => (
         <group key={`bunk-${i}`} position={[b.x, 0.12, b.z]} rotation={[0, b.rot, 0]}>
           <mesh position={[0, 0.22, 0]}>
@@ -60,8 +63,27 @@ export function CommandDomeInterior() {
           </mesh>
           <mesh position={[0, 0.42, 0]}>
             <boxGeometry args={[1.7, 0.12, 0.65]} />
-            <meshStandardMaterial color="#6a5546" roughness={0.85} />
+            <meshStandardMaterial
+              color={b.rest ? "#56684f" : "#6a5546"}
+              roughness={0.85}
+            />
           </mesh>
+          {b.rest && (
+            <>
+              <mesh position={[0.55, 0.54, 0]}>
+                <boxGeometry args={[0.5, 0.14, 0.55]} />
+                <meshStandardMaterial color="#7a4a38" roughness={0.9} />
+              </mesh>
+              <mesh position={[-0.99, 0.5, 0]}>
+                <boxGeometry args={[0.06, 0.12, 0.2]} />
+                <meshStandardMaterial
+                  color="#2a3540"
+                  emissive="#3d9e8f"
+                  emissiveIntensity={0.9}
+                />
+              </mesh>
+            </>
+          )}
         </group>
       ))}
       {[

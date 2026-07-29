@@ -5,6 +5,12 @@ type AudioApi = {
   setOutdoor: (v: number) => void;
   setTension: (v: number) => void;
   setNearFern: (v: number) => void;
+  /** Rain bed level, 0..1 — the weather sim feeds it weatherIntensity. */
+  setRain: (v: number) => void;
+  /** Dome interior: lowpass + duck the wind/rain/thunder bus. */
+  setInterior: (v: boolean) => void;
+  /** Thunder one-shot; 1 = overhead (bright, loud, immediate), 0 = far. */
+  thunder: (distance01?: number) => void;
   setMasterVolume?: (v: number) => void;
   footstep?: (run?: boolean) => void;
   pulseInteract: () => void;
@@ -22,6 +28,9 @@ export function getAudio(): AudioApi {
       setOutdoor: () => {},
       setTension: () => {},
       setNearFern: () => {},
+      setRain: () => {},
+      setInterior: () => {},
+      thunder: () => {},
       setMasterVolume: () => {},
       footstep: () => {},
       pulseInteract: () => {},
@@ -44,6 +53,18 @@ export function getAudio(): AudioApi {
   const noiseBuf = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
   const data = noiseBuf.getChannelData(0);
   for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+  // Weather bus: wind, rain and thunder share one path so the dome interior
+  // can lowpass and duck them together without touching UI pulses or steps.
+  const interiorFilter = ctx.createBiquadFilter();
+  interiorFilter.type = "lowpass";
+  interiorFilter.frequency.value = 18000;
+  interiorFilter.Q.value = 0.4;
+  const weatherBus = ctx.createGain();
+  weatherBus.gain.value = 1;
+  weatherBus.connect(interiorFilter);
+  interiorFilter.connect(master);
+
   const noise = ctx.createBufferSource();
   noise.buffer = noiseBuf;
   noise.loop = true;
@@ -55,8 +76,19 @@ export function getAudio(): AudioApi {
   windGain.gain.value = 0.35;
   noise.connect(windFilter);
   windFilter.connect(windGain);
-  windGain.connect(master);
+  windGain.connect(weatherBus);
   noise.start();
+
+  // Rain bed: the same looping noise source fanned into a brighter band.
+  const rainFilter = ctx.createBiquadFilter();
+  rainFilter.type = "bandpass";
+  rainFilter.frequency.value = 2200;
+  rainFilter.Q.value = 0.45;
+  const rainGain = ctx.createGain();
+  rainGain.gain.value = 0;
+  noise.connect(rainFilter);
+  rainFilter.connect(rainGain);
+  rainGain.connect(weatherBus);
 
   const drone = ctx.createOscillator();
   drone.type = "sine";
@@ -116,6 +148,58 @@ export function getAudio(): AudioApi {
     },
     setNearFern: (v) => {
       shimGain.gain.setTargetAtTime(v * 0.06, ctx.currentTime, 0.5);
+    },
+    setRain: (v) => {
+      const t = Math.max(0, Math.min(1, v));
+      rainGain.gain.setTargetAtTime(t * 0.45, ctx.currentTime, 0.8);
+      // Heavier rain reads brighter and wider, not merely louder.
+      rainFilter.frequency.setTargetAtTime(
+        1500 + t * 1700,
+        ctx.currentTime,
+        0.8,
+      );
+    },
+    setInterior: (v) => {
+      // Constants long enough that crossing the hatch swells, never clicks.
+      interiorFilter.frequency.setTargetAtTime(
+        v ? 320 : 18000,
+        ctx.currentTime,
+        0.25,
+      );
+      weatherBus.gain.setTargetAtTime(v ? 0.35 : 1, ctx.currentTime, 0.25);
+    },
+    thunder: (distance01 = 0.5) => {
+      const near = Math.max(0, Math.min(1, distance01));
+      // The report trails the flash: far cells arrive later, darker, longer.
+      const t0 = ctx.currentTime + (1 - near) * 1.1;
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuf;
+      src.loop = true;
+      src.playbackRate.value = 0.3 + near * 0.25;
+      const f = ctx.createBiquadFilter();
+      f.type = "lowpass";
+      f.frequency.setValueAtTime(120 + near * 260, t0);
+      f.frequency.setTargetAtTime(55, t0 + 0.2, 0.8);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.16 + near * 0.22, t0 + 0.07);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 1.7 + near * 1.3);
+      src.connect(f);
+      f.connect(g);
+      g.connect(weatherBus);
+      src.start(t0);
+      src.stop(t0 + 3.4);
+      const thump = ctx.createOscillator();
+      thump.type = "sine";
+      thump.frequency.value = 42;
+      const tg = ctx.createGain();
+      tg.gain.setValueAtTime(0.0001, t0);
+      tg.gain.exponentialRampToValueAtTime(0.04 + near * 0.11, t0 + 0.05);
+      tg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.9);
+      thump.connect(tg);
+      tg.connect(weatherBus);
+      thump.start(t0);
+      thump.stop(t0 + 1);
     },
     footstep: (run) => {
       const now = ctx.currentTime;

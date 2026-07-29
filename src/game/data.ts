@@ -296,6 +296,12 @@ export const INITIAL_CODEX: CodexEntry[] = [
     body: "Ops floor under the central prefab. Mission board, collar telemetry, and the only coffee that tastes like Earth regret.",
     unlocked: false,
   },
+  {
+    id: "route-learning",
+    title: "Route learning",
+    body: "Shadowfang packs do not follow an operative. They chart one. Repeated transits average into an intercept solution; the pack waits on the solution, not the trail. Vary route. Vary timing. A pattern is a rendezvous you did not agree to.",
+    unlocked: false,
+  },
 ];
 
 export const NPCS: NpcDef[] = [
@@ -673,7 +679,10 @@ export const MISSION_BOARD: MissionBoardItem[] = [
 
 export const SPAWNS: Record<SpawnPoint, { x: number; z: number; yaw: number }> = {
   "south-gate": { x: 0, z: 40, yaw: Math.PI },
-  colony: { x: 2, z: 20, yaw: 0 },
+  // On the pad south of the storage building, facing the dome. The obvious
+  // (2, 20) sat INSIDE the 9 m storage box at (4, 22) — a deep-linked player
+  // spawned into an unlit interior and saw a wall of black.
+  colony: { x: -4, z: 30, yaw: 0 },
   ridge7: { x: -100, z: 50, yaw: -Math.PI / 2 },
   ruins: { x: 18, z: 140, yaw: Math.PI },
   coast: { x: 20, z: 185, yaw: Math.PI },

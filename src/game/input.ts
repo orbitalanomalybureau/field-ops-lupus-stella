@@ -21,6 +21,7 @@ export type Action =
   | "scan"
   | "interact"
   | "combat"
+  | "attack"
   | "journal"
   | "photo"
   | "settings"
@@ -34,6 +35,7 @@ const EDGE_ACTIONS: ReadonlySet<Action> = new Set([
   "interact",
   "jump",
   "combat",
+  "attack",
   "journal",
   "photo",
   "settings",
@@ -56,6 +58,9 @@ export const DEFAULT_KEYMAP: Keymap = {
   scan: ["KeyQ", "KeyV"],
   interact: ["KeyE"],
   combat: ["KeyF"],
+  // KeyR is the free key nearest WASD; mouse button 0 maps to the same edge
+  // in attachKeyboard, and gamepad RT in pollGamepad.
+  attack: ["KeyR"],
   journal: ["KeyJ"],
   photo: ["KeyP"],
   settings: ["KeyK"],
@@ -102,6 +107,7 @@ let device: Device = "keyboard";
 let sensitivity = 1;
 let invertY = false;
 let padIndex: number | null = null;
+let padAttackWas = false;
 
 const touch: TouchState = {
   moveX: 0,
@@ -221,6 +227,12 @@ function pollGamepad(): { moveX: number; moveZ: number } | null {
   if (pad.buttons[2]?.pressed) edgePending.add("interact");
   if (pad.buttons[5]?.pressed) edgePending.add("combat");
   if (pad.buttons[9]?.pressed) edgePending.add("pause");
+  // RT (button 7), tracked as a real edge: a held trigger must not
+  // machine-gun a swing per poll the way the repeat on the buttons above
+  // would; one pull is one attack.
+  const rt = pad.buttons[7]?.pressed ?? false;
+  if (rt && !padAttackWas) edgePending.add("attack");
+  padAttackWas = rt;
 
   return { moveX: lx, moveZ: -ly };
 }
@@ -234,6 +246,7 @@ function pollGamepad(): { moveX: number; moveZ: number } | null {
  * and reads it with consumeEdge("interact"); PlayerController runs first in
  * the frame, so returning it here consumed the press before the interaction
  * system ever saw it and E did nothing at all. An edge has exactly one owner.
+ * `attack` is excluded for the same reason: Creatures.tsx owns it.
  */
 export function snapshot(): InputSnapshot {
   const pad = pollGamepad();
@@ -304,14 +317,27 @@ export function attachKeyboard(): () => void {
   };
   const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
 
+  // Mouse attack. Wired here rather than through a second attach function so
+  // PlayerController stays the input module's only mount point. Primary
+  // button only, and only while pointer lock is held — an unlocked click is
+  // UI, or the very click that acquires the lock, never a swing. Creatures.tsx
+  // is the sole consumer of this edge.
+  const onPointerDown = (e: PointerEvent) => {
+    if (e.button !== 0 || !document.pointerLockElement) return;
+    device = "keyboard";
+    edgePending.add("attack");
+  };
+
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("blur", clearHeld);
   document.addEventListener("visibilitychange", clearHeld);
 
   return () => {
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
+    window.removeEventListener("pointerdown", onPointerDown);
     window.removeEventListener("blur", clearHeld);
     document.removeEventListener("visibilitychange", clearHeld);
   };

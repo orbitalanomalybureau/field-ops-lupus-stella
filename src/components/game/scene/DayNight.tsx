@@ -55,6 +55,11 @@ export function DayNight() {
   const amb = useRef<THREE.AmbientLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
   const fill = useRef<THREE.DirectionalLight>(null);
+  // The world clock resumes from the store, not from a constant: the save
+  // persists timeOfDay for session continuity, and QA pins it via the ?tod=
+  // deep link. Hardcoding the start silently discarded both — every "resume"
+  // and every pinned screenshot began at 07:52 regardless.
+  const todStart = useRef(useGameStore.getState().timeOfDay);
   const clockAcc = useRef(0);
   const todPublish = useRef(0);
   const storm = useRef(0);
@@ -67,7 +72,7 @@ export function DayNight() {
     if (useGameStore.getState().phase === "paused") return;
     const d = Math.min(delta, 0.05);
     clockAcc.current += d;
-    const tod = (0.28 + clockAcc.current / WORLD.dayLengthSec) % 1;
+    const tod = (todStart.current + clockAcc.current / WORLD.dayLengthSec) % 1;
     todPublish.current += d;
     if (todPublish.current > 0.5) {
       todPublish.current = 0;

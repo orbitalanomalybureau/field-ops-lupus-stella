@@ -39,6 +39,7 @@ const ACTION_LABELS: Record<Action, string> = {
   scan: "Field scanner",
   interact: "Interact",
   combat: "Combat stance",
+  attack: "Strike (also mouse 1)",
   journal: "Field journal",
   photo: "Photo mode",
   settings: "This panel",

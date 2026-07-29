@@ -32,7 +32,7 @@ import type {
 const SAVE_KEY = "lupus-fieldops-v4";
 
 /** Bumped when the blob shape changes. Older blobs still load, best-effort. */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /** Keys from abandoned save schemas, swept on boot so they stop rotting. */
 const LEGACY_SAVE_KEYS = [
@@ -63,6 +63,19 @@ const SCAN_REVEALS: Record<string, ObjectiveId> = {
   "scan-grid": "ruins",
 };
 
+/**
+ * What a predator knows across reloads — "the planet remembers you". The
+ * learnedBias intercept point is a ground position, so y is omitted; `tracked`
+ * is the seconds of route data behind it (>45 s arms the night ambush).
+ */
+export type CreatureRecord = {
+  id: string;
+  bx: number;
+  bz: number;
+  tracked: number;
+  health: number;
+};
+
 type SaveBlob = {
   version?: number;
   updatedAt?: number;
@@ -80,6 +93,9 @@ type SaveBlob = {
   ruinOpened?: boolean;
   ruinSealed?: boolean;
   packsAggroed?: boolean;
+  fangQuills?: number;
+  fangKills?: number;
+  creatureMemory?: CreatureRecord[];
   ending?: Ending | null;
   discoveries?: number;
   health?: number;
@@ -121,8 +137,14 @@ type GameStore = {
   messages: string[];
   ruinOpened: boolean;
   ruinSealed: boolean;
-  /** Read by Creatures.tsx in a later phase: broadcasting wakes the packs. */
+  /** Set by the Broadcast ending: every pack hunts the operative from then
+   * on, stealth radii ignored. Consumed by Creatures.tsx; persisted. */
   packsAggroed: boolean;
+  /** Harvested from fang carcasses; Phase 5's inventory will consume these. */
+  fangQuills: number;
+  fangKills: number;
+  /** Per-predator learnedBias/health snapshots, written by Creatures.tsx. */
+  creatureMemory: CreatureRecord[];
   ending: Ending | null;
   playerPos: { x: number; y: number; z: number };
   playerYaw: number;
@@ -174,6 +196,10 @@ type GameStore = {
   setStamina: (s: number) => void;
   setSignal: (s: number) => void;
   setCombat: (v: boolean) => void;
+  recordFangKill: () => void;
+  recordFangQuill: () => void;
+  /** High-cadence caller: sets state only; autosave flushes it to the blob. */
+  saveCreatureMemory: (records: CreatureRecord[]) => void;
   setScanner: (v: boolean) => void;
   setScanProgress: (v: number) => void;
   markScanned: (id: string) => void;
@@ -352,6 +378,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   ruinOpened: false,
   ruinSealed: false,
   packsAggroed: false,
+  fangQuills: 0,
+  fangKills: 0,
+  creatureMemory: [],
   ending: null,
   playerPos: { x: 0, y: 0, z: 40 },
   playerYaw: Math.PI,
@@ -557,6 +586,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       combatEnabled ? "COMBAT STANCE — ARMED" : "SAFE STANCE — WEAPONS LOW",
     );
   },
+
+  recordFangKill: () => {
+    set({ fangKills: get().fangKills + 1 });
+    get().pushMessage("CONTACT DOWN — shadowfang neutralized");
+    get().persist();
+  },
+
+  recordFangQuill: () => {
+    set({ fangQuills: get().fangQuills + 1 });
+    get().pushMessage("SPECIMEN — fang quill secured");
+    get().persist();
+  },
+
+  saveCreatureMemory: (creatureMemory) => set({ creatureMemory }),
+
   setScanner: (scannerActive) => set({ scannerActive }),
   setScanProgress: (scanProgress) =>
     set({ scanProgress: Math.max(0, Math.min(1, scanProgress)) }),
@@ -915,6 +959,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ruinOpened: false,
       ruinSealed: false,
       packsAggroed: false,
+      fangQuills: 0,
+      fangKills: 0,
+      creatureMemory: [],
       ending: null,
       playerPos: { x: 0, y: 0, z: 40 },
       playerYaw: Math.PI,
@@ -965,6 +1012,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
           ruinOpened: s.ruinOpened,
           ruinSealed: s.ruinSealed,
           packsAggroed: s.packsAggroed,
+          fangQuills: s.fangQuills,
+          fangKills: s.fangKills,
+          creatureMemory: s.creatureMemory,
           ending: s.ending,
           discoveries: s.discoveries,
           health: s.health,
@@ -1038,6 +1088,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         ruinOpened: data.ruinOpened ?? false,
         ruinSealed: data.ruinSealed ?? false,
         packsAggroed: data.packsAggroed ?? false,
+        fangQuills: data.fangQuills ?? 0,
+        fangKills: data.fangKills ?? 0,
+        creatureMemory: data.creatureMemory ?? [],
         ending: data.ending ?? null,
         discoveries: data.discoveries ?? 0,
         health: data.health ?? 100,

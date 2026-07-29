@@ -35,7 +35,13 @@ const all = walk(outDir);
 // icons, and every hashed asset. Source maps and the SW itself are excluded.
 const precache = all
   .filter((f) => !f.endsWith(".map") && f !== "sw.js")
-  .filter((f) => f.startsWith("assets/") || f.startsWith("icons/") || f.endsWith(".webmanifest"))
+  .filter(
+    (f) =>
+      f.startsWith("assets/") ||
+      f.startsWith("icons/") ||
+      f.startsWith("fonts/") ||
+      f.endsWith(".webmanifest"),
+  )
   .map((f) => `/${f}`);
 
 const shell = ["/", "/offline"];

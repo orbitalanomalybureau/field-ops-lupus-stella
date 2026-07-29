@@ -37,7 +37,7 @@ import type {
 const SAVE_KEY = "lupus-fieldops-v4";
 
 /** Bumped when the blob shape changes. Older blobs still load, best-effort. */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 /** Keys from abandoned save schemas, swept on boot so they stop rotting. */
 const LEGACY_SAVE_KEYS = [
@@ -131,6 +131,15 @@ const HARVEST_RULES: Record<string, { item: ItemId; nightOnly?: boolean }> = {
   "scan-collar": { item: "collar-component" },
 };
 
+/**
+ * In-game days before a harvested HARVEST_RULES site regrows (0.5 day = 240
+ * real seconds at WORLD.dayLengthSec 480). Respawn is lazy and lives in
+ * setTimeOfDay — the only place world time advances — where a lapsed site
+ * simply drops out of scannedIds and the scanner picker finds it again.
+ * Deliberately silent: regrowth is ambient, not a ticker event.
+ */
+const HARVEST_RESPAWN_DAYS = 0.5;
+
 /** The game's one definition of night — the window Creatures.tsx hunts in. */
 function isNight(timeOfDay: number): boolean {
   return timeOfDay < 0.25 || timeOfDay > 0.78;
@@ -170,6 +179,9 @@ type SaveBlob = {
   revealedObjectives?: ObjectiveId[];
   codex?: CodexEntry[];
   scannedIds?: string[];
+  everScanned?: string[];
+  lastHarvest?: Record<string, number>;
+  worldDays?: number;
   cachesLooted?: string[];
   npcsTalked?: string[];
   dynamicMarkers?: WorldMarker[];
@@ -218,7 +230,18 @@ type GameStore = {
   combatEnabled: boolean;
   scannerActive: boolean;
   scanProgress: number;
+  /** Sites currently consumed by a scan. Harvest sites (HARVEST_RULES) drop
+   * back out when they regrow — everScanned is the permanent record. */
   scannedIds: string[];
+  /** Every target ever scanned, distinct. Drives the scan objective, so a
+   * respawning harvest site can never un-complete tasking. Persisted. */
+  everScanned: string[];
+  /** worldDays stamp per harvested HARVEST_RULES id; entry cleared when the
+   * site regrows. Persisted. */
+  lastHarvest: Record<string, number>;
+  /** Total elapsed in-game time in days (float), accumulated from
+   * setTimeOfDay deltas. Never runs backwards. Persisted; feeds regrowth. */
+  worldDays: number;
   cachesLooted: string[];
   npcsTalked: string[];
   ridgeBeaconPlanted: boolean;
@@ -445,6 +468,38 @@ function mergeCodex(saved?: CodexEntry[]): CodexEntry[] {
   }));
 }
 
+/**
+ * Pre-v7 saves have no everScanned — scannedIds WAS the permanent record — so
+ * the live set seeds it. Union keeps the scan objective's distinct count
+ * monotonic across the schema change.
+ */
+function mergeEverScanned(saved?: string[], scannedIds?: string[]): string[] {
+  return Array.from(new Set([...(saved ?? []), ...(scannedIds ?? [])]));
+}
+
+/**
+ * Unknown ids drop; stamps clamp into [0, worldDays] so a corrupt future
+ * stamp cannot hold a site dead forever. A pre-v7 save that consumed a
+ * harvest site carries no stamp — seed one at load so the site regrows one
+ * cooldown from now instead of staying spent for the life of the save.
+ */
+function mergeLastHarvest(
+  saved: Record<string, number> | undefined,
+  scannedIds: string[],
+  worldDays: number,
+): Record<string, number> {
+  const lastHarvest: Record<string, number> = {};
+  for (const id of Object.keys(HARVEST_RULES)) {
+    const v = saved?.[id];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      lastHarvest[id] = Math.max(0, Math.min(worldDays, v));
+    } else if (scannedIds.includes(id)) {
+      lastHarvest[id] = worldDays;
+    }
+  }
+  return lastHarvest;
+}
+
 function mergeInventory(
   saved?: Partial<Record<ItemId, number>>,
 ): Record<ItemId, number> {
@@ -626,6 +681,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   scannerActive: false,
   scanProgress: 0,
   scannedIds: [],
+  everScanned: [],
+  lastHarvest: {},
   cachesLooted: [],
   npcsTalked: [],
   ridgeBeaconPlanted: false,
@@ -653,6 +710,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   interact: null,
   compassBearing: 0,
   timeOfDay: 0.35,
+  worldDays: 0,
   weather: "haze",
   weatherIntensity: 0.25,
   stormSurvived: false,
@@ -961,10 +1019,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
   markScanned: (id) => {
     if (get().scannedIds.includes(id)) return;
     const scannedIds = [...get().scannedIds, id];
-    set({ scannedIds });
+    // The objective counts everScanned, not the live set — a harvest site
+    // dropping back out of scannedIds must never un-complete tasking.
+    const everScanned = get().everScanned.includes(id)
+      ? get().everScanned
+      : [...get().everScanned, id];
+    set({ scannedIds, everScanned });
     const reveal = SCAN_REVEALS[id];
     if (reveal) get().revealObjective(reveal);
-    if (scannedIds.length >= 3) get().completeObjective("scan");
+    if (everScanned.length >= 3) get().completeObjective("scan");
     get().persist();
   },
 
@@ -977,6 +1040,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().pushMessage("SPECIMEN — spores inert by day; sample after dark");
       return false;
     }
+    // Stamp the regrowth clock; setTimeOfDay clears the site when it lapses.
+    set({
+      lastHarvest: { ...get().lastHarvest, [targetId]: get().worldDays },
+    });
     get().grantItem(rule.item);
     return true;
   },
@@ -1036,7 +1103,43 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (Math.abs(get().compassBearing - compassBearing) < 0.5) return;
     set({ compassBearing });
   },
-  setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
+  // Also the world clock and the lazy harvest-respawn sweep: this is the one
+  // place in-game time advances, so regrowth checks belong here and nowhere
+  // else. Called per frame by the day cycle — the sweep walks at most the
+  // three HARVEST_RULES stamps, so the per-frame cost stays trivial.
+  setTimeOfDay: (timeOfDay) => {
+    // Normal ticks are tiny positive deltas; a wrap past midnight reads as a
+    // large negative one. A deep-link pin that moves the clock backwards by
+    // less than half a day advances nothing — worldDays never runs in
+    // reverse — and a larger jump back is indistinguishable from a wrap, so
+    // it counts forward through midnight.
+    let delta = timeOfDay - get().timeOfDay;
+    if (delta < -0.5) delta += 1;
+    const worldDays = get().worldDays + Math.max(0, delta);
+    const lastHarvest = get().lastHarvest;
+    let regrown: string[] | null = null;
+    for (const id of Object.keys(lastHarvest)) {
+      if (worldDays - lastHarvest[id] >= HARVEST_RESPAWN_DAYS) {
+        (regrown ??= []).push(id);
+      }
+    }
+    if (!regrown) {
+      set({ timeOfDay, worldDays });
+      return;
+    }
+    // Regrowth is silent by design — no toast; the site simply drops out of
+    // scannedIds and the scanner picker finds it again. Autosave flushes the
+    // change; persisting here would write localStorage mid-frame.
+    const due = regrown;
+    const next = { ...lastHarvest };
+    for (const id of due) delete next[id];
+    set({
+      timeOfDay,
+      worldDays,
+      lastHarvest: next,
+      scannedIds: get().scannedIds.filter((id) => !due.includes(id)),
+    });
+  },
 
   setWeather: (weather, intensity = 0.5) => {
     if (get().weather !== weather) {
@@ -1409,6 +1512,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       scannerActive: false,
       scanProgress: 0,
       scannedIds: [],
+      everScanned: [],
+      lastHarvest: {},
+      worldDays: 0,
       cachesLooted: [],
       npcsTalked: [],
       ridgeBeaconPlanted: false,
@@ -1468,6 +1574,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
           revealedObjectives: s.revealedObjectives,
           codex: s.codex,
           scannedIds: s.scannedIds,
+          everScanned: s.everScanned,
+          lastHarvest: s.lastHarvest,
+          worldDays: s.worldDays,
           cachesLooted: s.cachesLooted,
           npcsTalked: s.npcsTalked,
           dynamicMarkers: s.dynamicMarkers,
@@ -1540,12 +1649,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!data) return;
       const spoilerCeiling = data.spoilerCeiling ?? "book1";
       const objectives = mergeObjectives(data.objectives);
+      const scannedIds = data.scannedIds ?? [];
+      const worldDays =
+        typeof data.worldDays === "number" &&
+        Number.isFinite(data.worldDays) &&
+        data.worldDays >= 0
+          ? data.worldDays
+          : 0;
       set({
         characterId: data.characterId ?? null,
         objectives,
         revealedObjectives: mergeReveals(objectives, data.revealedObjectives),
         codex: mergeCodex(data.codex),
-        scannedIds: data.scannedIds ?? [],
+        scannedIds,
+        everScanned: mergeEverScanned(data.everScanned, scannedIds),
+        lastHarvest: mergeLastHarvest(data.lastHarvest, scannedIds, worldDays),
+        worldDays,
         cachesLooted: data.cachesLooted ?? [],
         npcsTalked: data.npcsTalked ?? [],
         dynamicMarkers: ceilingFilter(

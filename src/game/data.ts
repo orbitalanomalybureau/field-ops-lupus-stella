@@ -451,8 +451,18 @@ export const NPCS: NpcDef[] = [
  * (the pre-Phase-5 intro text, preserved verbatim) sits behind a `once:`
  * "met-<npc>" choice, so it plays exactly once and the hub decongests on every
  * later visit. Command branches gate on the "cmd-access" flag (seeded by the
- * store when the operative is Theo). Trades carry their full cost/payoff on
- * the initiating choice; the target node is the flavor receipt.
+ * store when the operative is Theo). Tier-1 trades carry their full
+ * cost/payoff on the initiating choice; the target node is the flavor receipt.
+ *
+ * Tier-2 trades chain instead, because a choice takes one condition and a
+ * `once` flag is raised the moment the choice is TAKEN: the hub choice gates
+ * only on the tier-1 once-flag (no `once` of its own — entering the offer must
+ * never lock the trade), the priced choice inside the chain gates on the item
+ * and carries the tier-2 once-flag plus the full effect, and every chain node
+ * keeps a "!tier2-flag" / "tier2-flag" fallback pair so no reachable state
+ * renders zero choices. Multi-cost trades gate one item per hop and take
+ * everything on the final choice, where every gate has provably passed —
+ * `take:` floors at 0, so a take must never run against an unchecked pocket.
  */
 export const DIALOGUES: Record<string, DialogueTree> = {
   "dlg-thornhill": {
@@ -487,6 +497,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
             once: "trade-thornhill-filter",
             next: "trade-filter",
             effect: "take:fern-spore:1|upgrade:scan:0.15",
+          },
+          {
+            label: "About a deeper filter pass.",
+            if: "trade-thornhill-filter",
+            next: "filter-2",
           },
           { label: "I'll let you work.", next: "end" },
         ],
@@ -605,6 +620,39 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         speaker: "Dr. Thornhill",
         text: "Live spores hold the lattice baseline better than any reference crystal we shipped from Earth. Filter's recalibrated — your scanner now reads the world the way the world keeps time.",
         choices: [{ label: "Appreciated, Doctor.", next: "end" }],
+      },
+      "filter-2": {
+        speaker: "Dr. Thornhill",
+        text: "The first pass taught your filter to hear the lattice. A second pass teaches it to subtract everything that isn't. I need two live spores — same bed, same night, still in phase. The pair is the measurement.",
+        choices: [
+          {
+            label: "Two spores, still pulsing.",
+            if: "item:fern-spore>=2",
+            once: "trade-thornhill-filter-2",
+            next: "trade-filter-2",
+            effect: "take:fern-spore:2|upgrade:scan:0.15",
+          },
+          {
+            label: "I'll walk the treeline for the pair.",
+            if: "!trade-thornhill-filter-2",
+            next: "end",
+          },
+          {
+            label: "Just confirming the calibration holds.",
+            if: "trade-thornhill-filter-2",
+            next: "filter-2-holds",
+          },
+        ],
+      },
+      "trade-filter-2": {
+        speaker: "Dr. Thornhill",
+        text: "In phase. Good. Differencing them now — there. Your scanner has stopped listening to itself. What's left is the planet.",
+        choices: [{ label: "Appreciated, Doctor.", next: "end" }],
+      },
+      "filter-2-holds": {
+        speaker: "Dr. Thornhill",
+        text: "It holds. A living reference doesn't drift — it corrects you. Carver would have appreciated the economy of that.",
+        choices: [{ label: "So do I.", next: "end" }],
       },
       end: {
         speaker: "Dr. Thornhill",
@@ -750,6 +798,17 @@ export const DIALOGUES: Record<string, DialogueTree> = {
             next: "trade-combat",
             effect: "take:fang-quill:3|upgrade:combat:0.1",
           },
+          {
+            label: "The armorer's second requisition.",
+            if: "trade-voss-combat",
+            next: "quills-2",
+          },
+          {
+            label: "Surplus quills. Two, flat rate.",
+            if: "item:fang-quill>=2",
+            next: "quill-buyback",
+            effect: "take:fang-quill:2|heal",
+          },
           { label: "Why the ledger obsession?", if: "met-voss", next: "records" },
           { label: "Just checking in.", next: "end" },
         ],
@@ -817,6 +876,39 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         text: "Quills to the armorer, plates to the press. Collect them on your way out — hard plates re-laminated with fang laminate. There's a poem in that. The log says I didn't say so.",
         choices: [{ label: "Appreciated.", next: "end" }],
       },
+      "quills-2": {
+        speaker: "Adele Voss",
+        text: "Standing requisition: five quills, intact, no splits. The first plates tested out and now half the perimeter detail wants the laminate. I don't run waiting lists. I run stock.",
+        choices: [
+          {
+            label: "Five quills, intact, on the counter.",
+            if: "item:fang-quill>=5",
+            once: "trade-voss-combat-2",
+            next: "trade-combat-2",
+            effect: "take:fang-quill:5|upgrade:combat:0.15",
+          },
+          {
+            label: "I'll fill the requisition.",
+            if: "!trade-voss-combat-2",
+            next: "end",
+          },
+          {
+            label: "Requisition's filled. Logging my exit.",
+            if: "trade-voss-combat-2",
+            next: "end",
+          },
+        ],
+      },
+      "trade-combat-2": {
+        speaker: "Adele Voss",
+        text: "Counted, logged, closed. Full overlay this run — plates, joints, the neck seam everyone forgets until a fang doesn't. The ledger now lists you as expensive to lose. Stay that way.",
+        choices: [{ label: "Every column open.", next: "end" }],
+      },
+      "quill-buyback": {
+        speaker: "Adele Voss",
+        text: "Flat rate, no haggling: two quills, one med chit. Laminate stock never sits — the armorer clears it faster than I can log it. Chit's stamped; Castillo honors it on the spot. Spend it before you need it.",
+        choices: [{ label: "Pleasure doing commerce.", next: "end" }],
+      },
       records: {
         speaker: "Adele Voss",
         text: "Because memory dies and the ledger doesn't. Every name that ever crossed this gate is in it, and every one of them comes back — one column or the other.",
@@ -855,6 +947,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
             once: "trade-berger-servo",
             next: "trade-servo",
             effect: "take:prism-shard:1|upgrade:stamina:0.1",
+          },
+          {
+            label: "That servo tune. Can you go deeper?",
+            if: "trade-berger-servo",
+            next: "servo-2",
           },
           { label: "Keep an ear out.", next: "end" },
         ],
@@ -913,6 +1010,56 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         speaker: "Berger",
         text: "Prism lattice grinds finer than anything in stores. Servo races have never run this smooth — suit'll carry you another klick before it complains. Don't waste the klick.",
         choices: [{ label: "Won't waste it.", next: "end" }],
+      },
+      "servo-2": {
+        speaker: "Berger",
+        text: "Deep tune's a rebuild, not a polish. Two prism shards for the races, and one collar component for the governor — retrofit laminate holds a tolerance the colony printers can't touch. Bring me all three pieces.",
+        choices: [
+          {
+            label: "Shards I have. Two of them.",
+            if: "item:prism-shard>=2",
+            next: "servo-2-gov",
+          },
+          {
+            label: "I'll source the pieces.",
+            if: "!trade-berger-servo-2",
+            next: "end",
+          },
+          {
+            label: "The rebuild's still running smooth.",
+            if: "trade-berger-servo-2",
+            next: "end",
+          },
+        ],
+      },
+      "servo-2-gov": {
+        speaker: "Berger",
+        text: "And the governor piece? No component, no rebuild — I'm not machining that tolerance out of raw stock, and I'm not asking Thornhill twice.",
+        choices: [
+          {
+            label: "One collar component. Take all three.",
+            if: "item:collar-component>=1",
+            once: "trade-berger-servo-2",
+            next: "trade-servo-2",
+            effect:
+              "take:prism-shard:2|take:collar-component:1|upgrade:stamina:0.15",
+          },
+          {
+            label: "The west collar sheds them. Back soon.",
+            if: "!trade-berger-servo-2",
+            next: "end",
+          },
+          {
+            label: "Never mind — the governor's already seated.",
+            if: "trade-berger-servo-2",
+            next: "end",
+          },
+        ],
+      },
+      "trade-servo-2": {
+        speaker: "Berger",
+        text: "Races ground, governor seated, torque like she just rolled off the yard. Suit'll stop arguing with you around the twentieth klick now instead of the tenth. Go wear it out.",
+        choices: [{ label: "Twenty klicks it is.", next: "end" }],
       },
       end: {
         speaker: "Berger",

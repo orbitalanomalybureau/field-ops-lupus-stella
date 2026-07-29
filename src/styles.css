@@ -1,5 +1,37 @@
 @import "tailwindcss";
 
+/* Self-hosted (public/fonts, latin subset, ~70 KB total): the Google Fonts
+   stylesheet was the last third-party runtime request and the one thing that
+   broke true offline play — the PWA precaches these with everything else. */
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/plex-mono-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/plex-mono-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/plex-mono-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/plex-sans-var.woff2") format("woff2");
+}
+
 @theme {
   --color-void: #05060a;
   --color-bg: #0a0c12;

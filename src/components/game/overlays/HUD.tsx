@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useGameStore } from "@/game/store";
 import { MARKERS, WORLD } from "@/game/data";
 import {
@@ -10,6 +10,7 @@ import { getKeymap, isHeld, lastDevice, type Device } from "@/game/input";
 import type {
   CodexEntry,
   ItemId,
+  Objective,
   ObjectiveId,
   WeatherKind,
   WorldMarker,
@@ -345,28 +346,23 @@ function vitalsTone(health: number) {
   return { bar: "bg-danger", label: "text-danger", pulse: true };
 }
 
+/** Hoisted so the memoized Bar receives referentially stable icon props. */
+const VITALS_ICON = <Activity className="h-3 w-3" />;
+const STAMINA_ICON = <span className="font-mono text-[11px]">STM</span>;
+const SIGNAL_ICON = <Radio className="h-3 w-3" />;
+
 export function HUD() {
+  // Low-frequency slices only. Every per-frame slice (playerPos, compass,
+  // vitals, scan, interact, clock) is subscribed inside a leaf component
+  // below; a movement tick must not reconcile the objectives, codex, or map
+  // panels through this component.
   const character = useGameStore((s) => s.getCharacter());
   const objectivesRaw = useGameStore((s) => s.objectives);
   const revealed = useGameStore((s) => s.revealedObjectives);
   const dynamicMarkers = useGameStore((s) => s.dynamicMarkers);
   const codexRaw = useGameStore((s) => s.codex);
   const spoiler = useGameStore((s) => s.spoilerCeiling);
-  const health = useGameStore((s) => s.health);
-  const stamina = useGameStore((s) => s.stamina);
-  const signalMeter = useGameStore((s) => s.signalMeter);
   const messages = useGameStore((s) => s.messages);
-  const combatEnabled = useGameStore((s) => s.combatEnabled);
-  const trackedByFang = useGameStore((s) => s.trackedByFang);
-  const playerPos = useGameStore((s) => s.playerPos);
-  const scannerActive = useGameStore((s) => s.scannerActive);
-  const scanProgress = useGameStore((s) => s.scanProgress);
-  const interact = useGameStore((s) => s.interact);
-  const compass = useGameStore((s) => s.compassBearing);
-  const scannedIds = useGameStore((s) => s.scannedIds);
-  const weather = useGameStore((s) => s.weather);
-  const timeOfDay = useGameStore((s) => s.timeOfDay);
-  const animState = useGameStore((s) => s.animState);
   const openJournal = useGameStore((s) => s.openJournal);
   const togglePause = useGameStore((s) => s.togglePause);
   const inventory = useGameStore((s) => s.inventory);
@@ -377,9 +373,6 @@ export function HUD() {
   const [codexSeen, setCodexSeen] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<string | null>(null);
   const [waypoint, setWaypoint] = useState<Vec2 | null>(null);
-  const [device, setDevice] = useState<Device>("keyboard");
-  const [staminaSpent, setStaminaSpent] = useState(false);
-  const staminaPrev = useRef(stamina);
 
   const objectives = useMemo(
     () => visibleObjectivesOf(objectivesRaw, revealed, spoiler),
@@ -441,26 +434,6 @@ export function HUD() {
     return () => setCodexSeen(snapshot);
   }, [panel, codexRaw, codexStage]);
 
-  // Sampled rather than read during render: input.ts is a mutable module, not a
-  // subscribable store, and the prompt only has to keep up with a thumb.
-  useEffect(() => {
-    const id = window.setInterval(() => setDevice(lastDevice()), 400);
-    return () => window.clearInterval(id);
-  }, []);
-
-  // Sprint denial has no store flag: only sprinting drains stamina, so a fall
-  // through the floor — or holding sprint while already there — is the denial.
-  useEffect(() => {
-    const prev = staminaPrev.current;
-    staminaPrev.current = stamina;
-    const denied =
-      stamina <= SPRINT_FLOOR && (prev > SPRINT_FLOOR || isHeld("sprint"));
-    if (!denied) return;
-    setStaminaSpent(true);
-    const t = window.setTimeout(() => setStaminaSpent(false), 900);
-    return () => window.clearTimeout(t);
-  }, [stamina]);
-
   // Phones get one auto-expiring line instead of the stacked feed; without it
   // pushMessage output is invisible on the primary form factor.
   useEffect(() => {
@@ -472,8 +445,6 @@ export function HUD() {
   }, [messages]);
 
   const doneCount = objectives.filter((o) => o.done).length;
-  const bearingLabel = cardinalOf(compass);
-  const vitals = vitalsTone(health);
   const carried = ITEM_ORDER.filter((id) => (inventory[id] ?? 0) > 0);
   // "New since last open" covers first unlocks too: an unread entry has no
   // marker, and stage 0 > -1.
@@ -481,69 +452,9 @@ export function HUD() {
     c.unlocked && (codexStage[c.id] ?? 0) > (codexSeen[c.id] ?? -1);
   const codexHasNews = panel !== "codex" && codex.some(codexIsNew);
 
-  const ranged = markers
-    .map((m) => ({ marker: m, dist: distanceTo(playerPos, m) }))
-    .sort((a, b) => a.dist - b.dist);
-  const trackedSites = trackedObjective
-    ? (OBJECTIVE_SITES[trackedObjective.id] ?? [])
-    : [];
-  const trackedSite =
-    ranged.find(({ marker }) => trackedSites.includes(marker.id)) ?? null;
-
-  const pips: TapePip[] = [];
-  if (waypoint) {
-    pips.push({
-      id: "waypoint",
-      label: "WAYPOINT",
-      dist: distanceTo(playerPos, waypoint),
-      rel: relativeBearing(bearingTo(playerPos, waypoint), compass),
-      tone: "text-fern",
-      shape: "waypoint",
-    });
-  }
-  if (trackedSite && trackedObjective) {
-    pips.push({
-      id: `tracked-${trackedSite.marker.id}`,
-      label: trackedObjective.title,
-      dist: trackedSite.dist,
-      rel: relativeBearing(bearingTo(playerPos, trackedSite.marker), compass),
-      tone: "text-accent",
-      shape: MARKER_STYLE[trackedSite.marker.kind].shape,
-      tracked: true,
-    });
-  }
-  let pipped = 0;
-  for (const { marker, dist } of ranged) {
-    if (pipped >= MAX_MARKER_PIPS) break;
-    if (marker.id === trackedSite?.marker.id) continue;
-    const rel = relativeBearing(bearingTo(playerPos, marker), compass);
-    if (Math.abs(rel) > TAPE_HALF_DEG) continue;
-    const style = MARKER_STYLE[marker.kind];
-    pips.push({
-      id: marker.id,
-      label: marker.label,
-      dist,
-      rel,
-      tone: style.tone,
-      shape: style.shape,
-    });
-    pipped += 1;
-  }
-
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
-      {health < CRITICAL_HEALTH && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 animate-pulse"
-          style={{
-            background: `radial-gradient(ellipse at center, transparent 38%, rgb(184 58 58 / ${(
-              0.16 +
-              (1 - health / CRITICAL_HEALTH) * 0.34
-            ).toFixed(2)}) 100%)`,
-          }}
-        />
-      )}
+      <DamageVignette />
 
       <div className="pointer-events-auto absolute left-0 right-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-4">
         <div className="panel-glass min-w-0 max-w-[8.5rem] rounded-md px-3 py-2 sm:max-w-[18rem]">
@@ -559,13 +470,7 @@ export function HUD() {
           <p className="mt-0.5 hidden truncate text-xs text-muted sm:block">
             {character?.rank} {character?.name}
           </p>
-          <p className="mt-1 truncate font-mono text-[11px] text-muted">
-            {timeLabel(timeOfDay)}
-            <span className="hidden sm:inline">
-              {" "}
-              · {animState.toUpperCase()}
-            </span>
-          </p>
+          <ClockLine />
         </div>
 
         {/* Never wraps: five 44px targets wrapping under the identity panel on a
@@ -610,47 +515,16 @@ export function HUD() {
           viewport, and hiding it on phones is exactly what made the old text
           compass useless on the form factor most players arrive on. */}
       <div className="absolute left-3 right-3 top-[4.5rem] sm:left-1/2 sm:right-auto sm:top-[5.5rem] sm:w-[26rem] sm:max-w-[calc(100%-2rem)] sm:-translate-x-1/2">
-        <CompassTape
-          compass={compass}
-          bearingLabel={bearingLabel}
-          pips={pips}
-          weather={weather}
+        <CompassRig
+          markers={markers}
+          waypoint={waypoint}
+          trackedObjective={trackedObjective}
         />
       </div>
 
-      {scannerActive && (
-        <div className="pointer-events-none absolute inset-0 border-2 border-accent/30">
-          <div className="absolute inset-8 border border-accent/20" />
-          <div className="absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full border border-accent/40" />
-          <div className="absolute bottom-36 left-1/2 w-48 -translate-x-1/2">
-            <p className="mb-1 flex items-center justify-center gap-1 font-mono text-[11px] text-accent">
-              <Scan className="h-3 w-3" /> SCAN · {scannedIds.length}
-            </p>
-            <div className="h-1 overflow-hidden rounded-full bg-surface">
-              <div
-                className="h-full bg-accent transition-all duration-150"
-                style={{ width: `${scanProgress * 100}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      <ScannerOverlay />
 
-      {interact && interact.dist < 8 && (
-        <div className="pointer-events-none absolute bottom-[38%] left-1/2 -translate-x-1/2">
-          <div className="panel-glass flex items-center gap-3 rounded-md px-4 py-2.5">
-            <InteractGlyph device={device} />
-            <div>
-              <p className="text-sm font-medium text-fg">{interact.label}</p>
-              {interact.sub && (
-                <p className="font-mono text-[11px] text-muted">
-                  {interact.sub}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <InteractPrompt />
 
       {/* right-20 on mobile leaves a gutter for the SPR/SCN/TAP action column
           (bottom-right, ~48px + margin) so the vitals bars are not occluded. */}
@@ -665,51 +539,7 @@ export function HUD() {
           </p>
         )}
         <div className="panel-glass space-y-2 rounded-md p-3">
-          <Bar
-            icon={<Activity className="h-3 w-3" />}
-            label="VITALS"
-            value={health}
-            color={vitals.bar}
-            labelClass={vitals.label}
-            pulse={vitals.pulse}
-          />
-          <Bar
-            icon={<span className="font-mono text-[11px]">STM</span>}
-            label="STAMINA"
-            value={stamina}
-            color={staminaSpent ? "bg-warn" : "bg-primary"}
-            labelClass={staminaSpent ? "text-warn" : "text-muted"}
-            pulse={staminaSpent}
-            note={staminaSpent ? "SPENT" : undefined}
-          />
-          <Bar
-            icon={<Radio className="h-3 w-3" />}
-            label="ZPE SIG"
-            value={signalMeter * 100}
-            color="bg-warn"
-          />
-          <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[11px]">
-            {/* State carries a glyph and a border, not colour alone: ARMED vs
-                SAFE must read for colour-blind operatives, and TRACKED must
-                survive reduced-motion, which strips the pulse. */}
-            <span
-              className={`rounded-sm border px-1 ${
-                combatEnabled
-                  ? "border-danger text-danger"
-                  : "border-border text-muted"
-              }`}
-            >
-              {combatEnabled ? "◈ ARMED" : "○ SAFE"}
-            </span>
-            {trackedByFang && (
-              <span className="animate-pulse rounded-sm border border-warn px-1 text-warn">
-                ▲ TRACKED
-              </span>
-            )}
-            <span className="text-muted">
-              {playerPos.x.toFixed(0)},{playerPos.z.toFixed(0)}
-            </span>
-          </div>
+          <VitalsBlock />
           {/* Wraps rather than truncates: at 375px four carried types become
               two terse lines, never a clipped count. */}
           {carried.length > 0 && (
@@ -841,8 +671,6 @@ export function HUD() {
           </p>
           <TacticalMap
             markers={markers}
-            playerPos={playerPos}
-            compass={compass}
             waypoint={waypoint}
             onSet={setWaypoint}
           />
@@ -852,7 +680,253 @@ export function HUD() {
   );
 }
 
-function CompassTape({
+/** Reads health alone, so the vignette pulse never reconciles the panels. */
+function DamageVignette() {
+  const health = useGameStore((s) => s.health);
+  if (health >= CRITICAL_HEALTH) return null;
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 animate-pulse"
+      style={{
+        background: `radial-gradient(ellipse at center, transparent 38%, rgb(184 58 58 / ${(
+          0.16 +
+          (1 - health / CRITICAL_HEALTH) * 0.34
+        ).toFixed(2)}) 100%)`,
+      }}
+    />
+  );
+}
+
+function ClockLine() {
+  // Derived-string selectors: timeOfDay ticks every frame, but the label only
+  // changes once a sim minute, and Object.is on the string absorbs the rest.
+  const clock = useGameStore((s) => timeLabel(s.timeOfDay));
+  const animLabel = useGameStore((s) => s.animState.toUpperCase());
+  return (
+    <p className="mt-1 truncate font-mono text-[11px] text-muted">
+      {clock}
+      <span className="hidden sm:inline"> · {animLabel}</span>
+    </p>
+  );
+}
+
+function CoordReadout() {
+  // Derived string: notifies only when a whole-metre coordinate changes.
+  const coords = useGameStore(
+    (s) => `${s.playerPos.x.toFixed(0)},${s.playerPos.z.toFixed(0)}`,
+  );
+  return <span className="text-muted">{coords}</span>;
+}
+
+function VitalsBlock() {
+  const health = useGameStore((s) => s.health);
+  const stamina = useGameStore((s) => s.stamina);
+  const signalMeter = useGameStore((s) => s.signalMeter);
+  const combatEnabled = useGameStore((s) => s.combatEnabled);
+  const trackedByFang = useGameStore((s) => s.trackedByFang);
+  const [staminaSpent, setStaminaSpent] = useState(false);
+  const staminaPrev = useRef(stamina);
+
+  // Sprint denial has no store flag: only sprinting drains stamina, so a fall
+  // through the floor — or holding sprint while already there — is the denial.
+  useEffect(() => {
+    const prev = staminaPrev.current;
+    staminaPrev.current = stamina;
+    const denied =
+      stamina <= SPRINT_FLOOR && (prev > SPRINT_FLOOR || isHeld("sprint"));
+    if (!denied) return;
+    setStaminaSpent(true);
+    const t = window.setTimeout(() => setStaminaSpent(false), 900);
+    return () => window.clearTimeout(t);
+  }, [stamina]);
+
+  const vitals = vitalsTone(health);
+
+  // A fragment, so the panel-glass container's space-y still sees each bar as
+  // a direct child.
+  return (
+    <>
+      <Bar
+        icon={VITALS_ICON}
+        label="VITALS"
+        value={health}
+        color={vitals.bar}
+        labelClass={vitals.label}
+        pulse={vitals.pulse}
+      />
+      <Bar
+        icon={STAMINA_ICON}
+        label="STAMINA"
+        value={stamina}
+        color={staminaSpent ? "bg-warn" : "bg-primary"}
+        labelClass={staminaSpent ? "text-warn" : "text-muted"}
+        pulse={staminaSpent}
+        note={staminaSpent ? "SPENT" : undefined}
+      />
+      <Bar
+        icon={SIGNAL_ICON}
+        label="ZPE SIG"
+        value={signalMeter * 100}
+        color="bg-warn"
+      />
+      <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[11px]">
+        {/* State carries a glyph and a border, not colour alone: ARMED vs
+            SAFE must read for colour-blind operatives, and TRACKED must
+            survive reduced-motion, which strips the pulse. */}
+        <span
+          className={`rounded-sm border px-1 ${
+            combatEnabled
+              ? "border-danger text-danger"
+              : "border-border text-muted"
+          }`}
+        >
+          {combatEnabled ? "◈ ARMED" : "○ SAFE"}
+        </span>
+        {trackedByFang && (
+          <span className="animate-pulse rounded-sm border border-warn px-1 text-warn">
+            ▲ TRACKED
+          </span>
+        )}
+        <CoordReadout />
+      </div>
+    </>
+  );
+}
+
+function ScannerOverlay() {
+  const scannerActive = useGameStore((s) => s.scannerActive);
+  const scanProgress = useGameStore((s) => s.scanProgress);
+  const scanCount = useGameStore((s) => s.scannedIds.length);
+  if (!scannerActive) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 border-2 border-accent/30">
+      <div className="absolute inset-8 border border-accent/20" />
+      <div className="absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full border border-accent/40" />
+      <div className="absolute bottom-36 left-1/2 w-48 -translate-x-1/2">
+        <p className="mb-1 flex items-center justify-center gap-1 font-mono text-[11px] text-accent">
+          <Scan className="h-3 w-3" /> SCAN · {scanCount}
+        </p>
+        <div className="h-1 overflow-hidden rounded-full bg-surface">
+          <div
+            className="h-full bg-accent transition-all duration-150"
+            style={{ width: `${scanProgress * 100}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InteractPrompt() {
+  const interact = useGameStore((s) => s.interact);
+  const [device, setDevice] = useState<Device>("keyboard");
+
+  // Sampled rather than read during render: input.ts is a mutable module, not a
+  // subscribable store, and the prompt only has to keep up with a thumb.
+  useEffect(() => {
+    const id = window.setInterval(() => setDevice(lastDevice()), 400);
+    return () => window.clearInterval(id);
+  }, []);
+
+  if (!interact || interact.dist >= 8) return null;
+  return (
+    <div className="pointer-events-none absolute bottom-[38%] left-1/2 -translate-x-1/2">
+      <div className="panel-glass flex items-center gap-3 rounded-md px-4 py-2.5">
+        <InteractGlyph device={device} />
+        <div>
+          <p className="text-sm font-medium text-fg">{interact.label}</p>
+          {interact.sub && (
+            <p className="font-mono text-[11px] text-muted">{interact.sub}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Per-frame bridge for the bearing tape: outside the on-demand map, this is
+ * the only subscriber to playerPos and compassBearing, so walking re-renders
+ * this leaf and nothing above it.
+ */
+function CompassRig({
+  markers,
+  waypoint,
+  trackedObjective,
+}: {
+  markers: WorldMarker[];
+  waypoint: Vec2 | null;
+  trackedObjective: Objective | null;
+}) {
+  const playerPos = useGameStore((s) => s.playerPos);
+  const compass = useGameStore((s) => s.compassBearing);
+  const weather = useGameStore((s) => s.weather);
+
+  // Memoised so the tape's memo holds when only weather notifies.
+  const pips = useMemo(() => {
+    const ranged = markers
+      .map((m) => ({ marker: m, dist: distanceTo(playerPos, m) }))
+      .sort((a, b) => a.dist - b.dist);
+    const trackedSites = trackedObjective
+      ? (OBJECTIVE_SITES[trackedObjective.id] ?? [])
+      : [];
+    const trackedSite =
+      ranged.find(({ marker }) => trackedSites.includes(marker.id)) ?? null;
+
+    const out: TapePip[] = [];
+    if (waypoint) {
+      out.push({
+        id: "waypoint",
+        label: "WAYPOINT",
+        dist: distanceTo(playerPos, waypoint),
+        rel: relativeBearing(bearingTo(playerPos, waypoint), compass),
+        tone: "text-fern",
+        shape: "waypoint",
+      });
+    }
+    if (trackedSite && trackedObjective) {
+      out.push({
+        id: `tracked-${trackedSite.marker.id}`,
+        label: trackedObjective.title,
+        dist: trackedSite.dist,
+        rel: relativeBearing(bearingTo(playerPos, trackedSite.marker), compass),
+        tone: "text-accent",
+        shape: MARKER_STYLE[trackedSite.marker.kind].shape,
+        tracked: true,
+      });
+    }
+    let pipped = 0;
+    for (const { marker, dist } of ranged) {
+      if (pipped >= MAX_MARKER_PIPS) break;
+      if (marker.id === trackedSite?.marker.id) continue;
+      const rel = relativeBearing(bearingTo(playerPos, marker), compass);
+      if (Math.abs(rel) > TAPE_HALF_DEG) continue;
+      const style = MARKER_STYLE[marker.kind];
+      out.push({
+        id: marker.id,
+        label: marker.label,
+        dist,
+        rel,
+        tone: style.tone,
+        shape: style.shape,
+      });
+      pipped += 1;
+    }
+    return out;
+  }, [markers, playerPos, compass, waypoint, trackedObjective]);
+
+  return (
+    <CompassTape
+      compass={compass}
+      bearingLabel={cardinalOf(compass)}
+      pips={pips}
+      weather={weather}
+    />
+  );
+}
+
+const CompassTape = memo(function CompassTape({
   compass,
   bearingLabel,
   pips,
@@ -940,21 +1014,23 @@ function CompassTape({
       </div>
     </div>
   );
-}
+});
 
-function TacticalMap({
+const TacticalMap = memo(function TacticalMap({
   markers,
-  playerPos,
-  compass,
   waypoint,
   onSet,
 }: {
   markers: WorldMarker[];
-  playerPos: { x: number; z: number };
-  compass: number;
   waypoint: Vec2 | null;
   onSet: (next: Vec2 | null) => void;
 }) {
+  // Mounted only while the map panel is open, so these per-frame reads are
+  // scoped to the panel's lifetime — traversal with the map closed pays
+  // nothing for them.
+  const playerPos = useGameStore((s) => s.playerPos);
+  const compass = useGameStore((s) => s.compassBearing);
+
   const legendKinds = useMemo(() => {
     const seen = new Set<WorldMarker["kind"]>();
     for (const m of markers) seen.add(m.kind);
@@ -1067,7 +1143,7 @@ function TacticalMap({
       </ul>
     </>
   );
-}
+});
 
 function MarkerGlyph({
   shape,
@@ -1121,7 +1197,7 @@ function InteractGlyph({ device }: { device: Device }) {
   );
 }
 
-function Bar({
+const Bar = memo(function Bar({
   icon,
   label,
   value,
@@ -1157,7 +1233,7 @@ function Bar({
       </div>
     </div>
   );
-}
+});
 
 function HudBtn({
   active,

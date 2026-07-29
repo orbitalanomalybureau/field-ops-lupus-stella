@@ -94,6 +94,7 @@ build if the game uses a canon term that has no entry here.
 - **Game asserts:** Designed the modulation-collar retrofit. Tracks nightly collar drift in millihertz. Carver signed the retrofit off with him.
 - **Ceiling:** `book1`
 - **Phase 5 addition (GAME-ASSERTED, command branch):** He keeps two logs. Published drift is 2 mHz/night, and the official log claims aggregate has never crossed 5; true aggregate is 8 mHz and climbing since storm season; cascade lock-in fails past 40 mHz; the night Carver died the west collar read 43. His stated reason for the double ledger: "a colony that counts millihertz stops planting." The published ceiling must read below the true 8 — that gap is the cover-up, and it is what makes the command-gated 8 and Carver's 43 land as the reveal. These numbers are load-bearing in the `collars` codex stage 2 — if the books quantify drift differently, both the dialogue and the codex stage must move.
+- **Phase 7 addition (GAME-ASSERTED):** His deeper scanner calibration differences a matched pair of in-phase fern spores — "the pair is the measurement"; a living reference "doesn't drift — it corrects you."
 
 ### June Castillo — perimeter med
 - **Status:** GAME-ASSERTED · **Ceiling:** `book1`
@@ -102,12 +103,14 @@ build if the game uses a canon term that has no entry here.
 ### Adele Voss — contracts / gate
 - **Status:** GAME-ASSERTED · **Ceiling:** `book1`
 - **Phase 5 additions (GAME-ASSERTED):** Keeps the gate ledger holding Survey Team B's unamended closing entry ("ALL IN. NO FURTHER TRANSMISSIONS."). Brokers fang-quill laminate to the colony armorer. Holds a standing command waiver for Theo, on file since landfall.
+- **Phase 7 additions (GAME-ASSERTED):** After the first plates test out, the armorer opens a standing requisition (five intact quills) for a full laminate overlay. Voss also buys surplus quills at a flat rate — two quills for one stamped med chit, honored by Castillo on the spot (the game's repeatable quill-for-heal trade).
 
 ### Berger — ark engineer
 - **Status:** GAME-ASSERTED
 - **Game asserts:** Knows the *Verne*'s hull. Reads incoming ion fronts by the sound of ark metal.
 - **Ceiling:** `book1`
 - **Phase 5 additions (GAME-ASSERTED):** Cut a plate from the *Verne*'s frame seven forward before ballast-down and keeps it mounted by his bench (the `verne-plate` site). Doctrine stance: "silence is just another hull — you keep it patched."
+- **Phase 7 addition (GAME-ASSERTED):** His deep servo rebuild grinds two prism shards for the races and seats a salvaged collar component as the governor — see *ZPE generators and modulation collars* for the laminate claim.
 
 ### Tomas — Office of the Voice
 - **Status:** NEEDS-CHECK · **Ceiling:** `book2early`
@@ -134,6 +137,7 @@ build if the game uses a canon term that has no entry here.
 - **Status:** NEEDS-CHECK
 - **Game asserts:** Four cores under collars that flatten the colony's signature into planetary noise. They drift a few millihertz a night. Cold cores kill slowly; bare signatures kill fast.
 - **Ceiling:** `book1`
+- **Phase 7 economy note (GAME-ASSERTED):** The west collar keeps shedding pre-retrofit laminate (`collar-component` item) as drift work continues — a fresh piece is salvageable roughly every half local day. Retrofit laminate holds machining tolerances the colony printers cannot; Berger seats one as a servo governor in his deep rebuild.
 
 ### The quiet protocol
 - **Status:** NEEDS-CHECK
@@ -173,12 +177,14 @@ build if the game uses a canon term that has no entry here.
 - **Ceiling:** `book1`
 - **Feedback to manuscript:** The 4.7-second figure originates here and is now load-bearing in gameplay (`WORLD.fernPulse`).
 - **Phase 5 economy note (GAME-ASSERTED):** Live spores are collectible (`fern-spore` item). They hold the lattice baseline (Thornhill's calibration reference) and carry an antiseptic fraction (Castillo's titration).
+- **Phase 7 economy note (GAME-ASSERTED):** A sampled bed recharges in about half a local day (the game's harvest regrowth cadence); spores still only carry charge at night, in the lattice-pulse window. Two spores taken from the same bed in phase serve as a differential pair — Thornhill's deeper filter calibration.
 
 ### Prismhoof
 - **Status:** NEEDS-CHECK
 - **Game asserts:** Herd fauna. Crystalline antler lattice refracts red-star light. Non-hostile unless cornered.
 - **Ceiling:** `book1`
 - **Phase 5 economy note (GAME-ASSERTED):** The lattice is shed seasonally; discarded laminae are the `prism-shard` item (Berger uses them as fine abrasive for servo work). Codex stage 2 adds herd tolerance behavior: slow walkers at two lengths, never straight lines.
+- **Phase 7 economy note (GAME-ASSERTED):** The herd sheds continually enough that a picked-over shed site yields again in about half a local day (the game's harvest regrowth cadence).
 
 ### Shadowfang
 - **Status:** NEEDS-CHECK

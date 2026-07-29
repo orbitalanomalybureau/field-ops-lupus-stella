@@ -3,9 +3,6 @@ import { useEffect } from "react";
 import appCss from "../styles.css?url";
 import { RouteErrorFault } from "@/components/ui/WorldErrorBoundary";
 
-const FONT_HREF =
-  "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap";
-
 export const Route = createRootRoute({
   errorComponent: ({ error }) => <RouteErrorFault error={error} />,
   head: () => ({
@@ -34,16 +31,15 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: "stylesheet", href: appCss },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      // Fonts are self-hosted (@font-face in styles.css) — zero third-party
+      // runtime requests, which is what makes the PWA genuinely offline.
       {
-        rel: "preconnect",
-        href: "https://fonts.gstatic.com",
+        rel: "preload",
+        href: "/fonts/plex-mono-400.woff2",
+        as: "font",
+        type: "font/woff2",
         crossOrigin: "anonymous",
       },
-      // Non-blocking webfont load: the terminal UI paints immediately on the
-      // system mono/sans fallbacks declared in styles.css, then upgrades.
-      // TODO(offline): self-host these as woff2 under public/fonts to drop the
-      // last third-party runtime request — see DEPLOY.md § Fonts.
       { rel: "manifest", href: "/manifest.webmanifest" },
       { rel: "icon", href: "/icons/icon-192.png", type: "image/png" },
       { rel: "apple-touch-icon", href: "/icons/icon-192.png" },
@@ -65,18 +61,6 @@ function RootDocument() {
     <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
-        <link
-          rel="stylesheet"
-          href={FONT_HREF}
-          media="print"
-          // Flip to `all` once loaded so the font never blocks first paint.
-          onLoad={(e) => {
-            (e.currentTarget as HTMLLinkElement).media = "all";
-          }}
-        />
-        <noscript>
-          <link rel="stylesheet" href={FONT_HREF} />
-        </noscript>
       </head>
       <body>
         <Outlet />

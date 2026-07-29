@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useGameStore } from "@/game/store";
 import { MARKERS } from "@/game/data";
+import { passesCeiling, visibleObjectivesOf } from "@/game/selectors";
 import type { WeatherKind } from "@/game/types";
 import {
   Crosshair,
   Map as MapIcon,
   BookOpen,
+  NotebookPen,
   Activity,
   Radio,
   Pause,
@@ -40,6 +42,8 @@ function weatherClass(weather: WeatherKind) {
 export function HUD() {
   const character = useGameStore((s) => s.getCharacter());
   const objectivesRaw = useGameStore((s) => s.objectives);
+  const revealed = useGameStore((s) => s.revealedObjectives);
+  const dynamicMarkers = useGameStore((s) => s.dynamicMarkers);
   const codexRaw = useGameStore((s) => s.codex);
   const spoiler = useGameStore((s) => s.spoilerCeiling);
   const health = useGameStore((s) => s.health);
@@ -63,17 +67,21 @@ export function HUD() {
   const [toast, setToast] = useState<string | null>(null);
 
   const objectives = useMemo(
-    () => objectivesRaw.filter((o) => !o.book2 || spoiler !== "book1"),
-    [objectivesRaw, spoiler],
+    () => visibleObjectivesOf(objectivesRaw, revealed, spoiler),
+    [objectivesRaw, revealed, spoiler],
   );
   const codex = useMemo(
-    () => codexRaw.filter((c) => !c.book2 || spoiler !== "book1"),
+    () => codexRaw.filter((c) => passesCeiling(c, spoiler)),
     [codexRaw, spoiler],
   );
-  const markers = useMemo(
-    () => MARKERS.filter((m) => !m.book2 || spoiler !== "book1"),
-    [spoiler],
-  );
+  // Dialogue hints and field discoveries add pips at runtime; dedupe by id so a
+  // hint that points at a static marker collapses onto it.
+  const markers = useMemo(() => {
+    const merged = [...MARKERS, ...dynamicMarkers].filter((m) =>
+      passesCeiling(m, spoiler),
+    );
+    return Array.from(new Map(merged.map((m) => [m.id, m])).values());
+  }, [dynamicMarkers, spoiler]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -112,18 +120,25 @@ export function HUD() {
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
       <div className="pointer-events-auto absolute left-0 right-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-4">
-        <div className="panel-glass max-w-[min(100%,18rem)] rounded-md px-3 py-2">
+        <div className="panel-glass min-w-0 max-w-[8.5rem] rounded-md px-3 py-2 sm:max-w-[18rem]">
           <div className="flex items-center gap-2">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-            <p className="font-mono text-[10px] tracking-[0.25em] text-accent">
-              FIELD OPS · {character?.callsign ?? "—"}
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+            <p className="truncate font-mono text-[10px] tracking-[0.25em] text-accent">
+              {character?.callsign ?? "—"}
+              <span className="hidden sm:inline"> · FIELD OPS</span>
             </p>
           </div>
-          <p className="mt-0.5 text-xs text-muted">
+          {/* Rank and full name are identity flavour; on a phone the vertical
+              space belongs to the world, not to a second copy of the callsign. */}
+          <p className="mt-0.5 hidden truncate text-xs text-muted sm:block">
             {character?.rank} {character?.name}
           </p>
-          <p className="mt-1 font-mono text-[10px] text-dim">
-            {timeLabel(timeOfDay)} · {animState.toUpperCase()}
+          <p className="mt-1 truncate font-mono text-[10px] text-dim">
+            {timeLabel(timeOfDay)}
+            <span className="hidden sm:inline">
+              {" "}
+              · {animState.toUpperCase()}
+            </span>
           </p>
         </div>
 
@@ -140,7 +155,9 @@ export function HUD() {
           </div>
         </div>
 
-        <div className="flex flex-wrap justify-end gap-1.5">
+        {/* Never wraps: five 44px targets wrapping under the identity panel on a
+            375px viewport is what made the mobile HUD overlap itself. */}
+        <div className="flex shrink-0 flex-nowrap justify-end gap-1 sm:gap-1.5">
           <HudBtn
             active={panel === "obj"}
             onClick={() => setPanel(panel === "obj" ? "none" : "obj")}
@@ -163,7 +180,7 @@ export function HUD() {
             active={false}
             onClick={openJournal}
             label="Log"
-            icon={<BookOpen className="h-4 w-4" />}
+            icon={<NotebookPen className="h-4 w-4" />}
           />
           <HudBtn
             active={false}
@@ -251,7 +268,7 @@ export function HUD() {
       </div>
 
       {panel === "obj" && (
-        <div className="pointer-events-auto absolute left-3 top-20 max-h-[48vh] w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+        <div className="pointer-events-auto absolute left-3 top-24 max-h-[48vh] sm:top-20 w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
           <p className="mb-2 font-mono text-[10px] tracking-widest text-accent">
             OBJECTIVES {doneCount}/{objectives.length}
           </p>
@@ -280,7 +297,7 @@ export function HUD() {
       )}
 
       {panel === "codex" && (
-        <div className="pointer-events-auto absolute left-3 top-20 max-h-[55vh] w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+        <div className="pointer-events-auto absolute left-3 top-24 max-h-[55vh] sm:top-20 w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
           <p className="mb-2 font-mono text-[10px] tracking-widest text-accent">
             FIELD CODEX
           </p>
@@ -304,7 +321,7 @@ export function HUD() {
       )}
 
       {panel === "map" && (
-        <div className="pointer-events-auto absolute left-1/2 top-20 w-[min(100%-1.5rem,19rem)] -translate-x-1/2 panel-glass rounded-md p-3 sm:left-auto sm:right-4 sm:translate-x-0">
+        <div className="pointer-events-auto absolute left-1/2 top-24 w-[min(100%-1.5rem,19rem)] sm:top-20 -translate-x-1/2 panel-glass rounded-md p-3 sm:left-auto sm:right-4 sm:translate-x-0">
           <p className="mb-2 font-mono text-[10px] tracking-widest text-accent">
             TACTICAL MAP
           </p>
@@ -397,14 +414,18 @@ function HudBtn({
     <button
       type="button"
       onClick={onClick}
-      className={`flex min-h-11 min-w-11 items-center gap-1.5 rounded-md border px-2.5 font-mono text-[10px] tracking-wide transition ${
+      aria-label={label}
+      aria-pressed={active}
+      className={`flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-md border px-1.5 font-mono text-[9px] tracking-wide transition sm:flex-row sm:gap-1.5 sm:px-2.5 sm:text-[10px] ${
         active
           ? "border-accent bg-accent/15 text-accent"
           : "border-border bg-surface/80 text-muted hover:border-muted hover:text-fg"
       }`}
     >
       {icon}
-      <span className="hidden sm:inline">{label}</span>
+      {/* Labelled at every size — two of the five icons used to be identical,
+          leaving mobile with a row of indistinguishable glyphs. */}
+      <span>{label}</span>
     </button>
   );
 }

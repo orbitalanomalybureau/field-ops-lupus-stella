@@ -14,14 +14,20 @@ export function Ruins({
   const glyphs = useRef<THREE.Group>(null);
   const y = sampleHeight(position[0], position[2]);
   const opened = useGameStore((s) => s.ruinOpened);
+  const granted = useGameStore((s) => s.isObjectiveAvailable("ruins"));
+  /** A breached chamber stays awake however the quest graph reads afterwards. */
+  const awake = opened || granted;
+  const glyphEmissive = opened ? "#3d9e8f" : awake ? "#305070" : "#0b1016";
+  const glyphIntensity = opened ? 1.1 : awake ? 0.45 : 0.03;
+  const shaftOpacity = opened ? 0.18 : awake ? 0.08 : 0.012;
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
     if (glow.current) {
-      glow.current.emissiveIntensity = 0.55 + Math.sin(t * 1.3) * 0.35;
+      glow.current.emissiveIntensity = awake ? 0.55 + Math.sin(t * 1.3) * 0.35 : 0.05;
     }
-    if (ring.current) ring.current.rotation.y = t * 0.2;
-    if (glyphs.current) {
+    if (ring.current) ring.current.rotation.y = awake ? t * 0.2 : 0;
+    if (glyphs.current && awake) {
       glyphs.current.children.forEach((c, i) => {
         (c as THREE.Mesh).position.y = 2.2 + Math.sin(t * 1.5 + i) * 0.08;
       });
@@ -76,8 +82,8 @@ export function Ruins({
             <planeGeometry args={[1.5, 2.4]} />
             <meshStandardMaterial
               color="#0a1018"
-              emissive={opened ? "#3d9e8f" : "#305070"}
-              emissiveIntensity={opened ? 1.1 : 0.45}
+              emissive={glyphEmissive}
+              emissiveIntensity={glyphIntensity}
               metalness={0.55}
               roughness={0.35}
             />
@@ -88,9 +94,9 @@ export function Ruins({
       <mesh ref={ring} position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[5.5, 6.1, 64]} />
         <meshBasicMaterial
-          color="#3d9e8f"
+          color={awake ? "#3d9e8f" : "#1b2730"}
           transparent
-          opacity={0.55}
+          opacity={awake ? 0.55 : 0.07}
           side={THREE.DoubleSide}
         />
       </mesh>
@@ -101,7 +107,7 @@ export function Ruins({
         <meshBasicMaterial
           color="#4a90c0"
           transparent
-          opacity={opened ? 0.18 : 0.08}
+          opacity={shaftOpacity}
           side={THREE.DoubleSide}
           depthWrite={false}
         />
@@ -110,10 +116,10 @@ export function Ruins({
       <pointLight
         position={[0, 3.5, 0]}
         color="#5a9acc"
-        intensity={opened ? 14 : 5}
+        intensity={opened ? 14 : awake ? 5 : 1.2}
         distance={28}
       />
-      <pointLight position={[0, 1, 2]} color="#3d9e8f" intensity={3} distance={12} />
+      <pointLight position={[0, 1, 2]} color="#3d9e8f" intensity={awake ? 3 : 0.6} distance={12} />
     </group>
   );
 }

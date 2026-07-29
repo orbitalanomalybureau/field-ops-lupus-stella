@@ -15,6 +15,9 @@ export type GamePhase =
 
 export type SpoilerCeiling = "book1" | "book2early";
 
+/** How the survey was closed out. Null until the log is sealed. */
+export type Ending = "silent" | "broadcast";
+
 export type ObjectiveId =
   | "perimeter"
   | "ferns"
@@ -39,6 +42,12 @@ export type Objective = {
   optional?: boolean;
   /** Hidden when spoiler ceiling is book1 */
   book2?: boolean;
+  /** Cannot be completed until every listed objective is done. */
+  requires?: ObjectiveId[];
+  /** Absent from the log until the player earns the reveal. */
+  hidden?: boolean;
+  /** Status line pushed on reveal. Falls back to the title. */
+  tasking?: string;
 };
 
 export type CodexEntry = {

@@ -5,6 +5,40 @@ import { Html } from "@react-three/drei";
 import { useGameStore } from "@/game/store";
 import { sampleHeight } from "@/game/worldHeight";
 import { WORLD } from "@/game/data";
+import type { ObjectiveId, WorldMarker } from "@/game/types";
+
+type GameState = ReturnType<typeof useGameStore.getState>;
+
+type ObjectivePip = {
+  id: ObjectiveId;
+  pos: readonly [number, number, number];
+  label: string;
+};
+
+/**
+ * Objectives that resolve to one site. Ids absent here (scan, caches, npcs,
+ * journal3, storm, shadowfang) are colony-wide or multi-site and carry no pip.
+ */
+const OBJECTIVE_PIPS: ObjectivePip[] = [
+  { id: "perimeter", pos: WORLD.southGate, label: "SOUTH PERIMETER" },
+  { id: "dome", pos: WORLD.domeHatch, label: "DOME HATCH" },
+  { id: "ferns", pos: [0, 0, WORLD.treelineZ + 4], label: "FERN LOG" },
+  { id: "prismhoof", pos: WORLD.herdPos, label: "HERD FIELD" },
+  { id: "ridge7", pos: WORLD.ridgeOverlook, label: "RIDGE-7 BEACON" },
+  { id: "kaguyahime", pos: WORLD.coastMemorial, label: "COAST MEMORIAL" },
+  { id: "ruins", pos: WORLD.ruinPos, label: "RUIN" },
+  { id: "remember", pos: WORLD.ruinPos, label: "CHAMBER" },
+];
+
+/** A hint pip and an objective pip can name the same site; the objective wins. */
+const PIP_MERGE_RADIUS = 14;
+
+function pipActive(s: GameState, id: ObjectiveId) {
+  const o = s.objectives.find((x) => x.id === id);
+  if (!o || o.done) return false;
+  if (o.book2 && s.spoilerCeiling === "book1") return false;
+  return s.isObjectiveAvailable(id);
+}
 
 function Cache({ id, x, z }: { id: string; x: number; z: number }) {
   const looted = useGameStore((s) => s.cachesLooted.includes(id));
@@ -89,28 +123,44 @@ function QuestMarker({ x, z, label, active }: { x: number; z: number; label: str
   );
 }
 
+function ObjectiveMarker({ pip }: { pip: ObjectivePip }) {
+  const active = useGameStore((s) => pipActive(s, pip.id));
+  return <QuestMarker x={pip.pos[0]} z={pip.pos[2]} label={pip.label} active={active} />;
+}
+
+function HintMarker({ marker }: { marker: WorldMarker }) {
+  const active = useGameStore(
+    (s) =>
+      !OBJECTIVE_PIPS.some(
+        (p) =>
+          Math.hypot(p.pos[0] - marker.x, p.pos[2] - marker.z) < PIP_MERGE_RADIUS &&
+          pipActive(s, p.id),
+      ),
+  );
+  return (
+    <QuestMarker
+      x={marker.x}
+      z={marker.z}
+      label={marker.label.toUpperCase()}
+      active={active}
+    />
+  );
+}
+
 export function WorldPOIs() {
-  const objectives = useGameStore((s) => s.objectives);
-  const ruinDone = objectives.find((o) => o.id === "ruins")?.done;
-  const fernDone = objectives.find((o) => o.id === "ferns")?.done;
+  const dynamicMarkers = useGameStore((s) => s.dynamicMarkers);
 
   return (
     <group>
       <Cache id="cache-a" x={-22} z={88} />
       <Cache id="cache-b" x={28} z={118} />
       <SensorMast />
-      <QuestMarker
-        x={0}
-        z={WORLD.treelineZ + 4}
-        label="FERN LOG"
-        active={!fernDone}
-      />
-      <QuestMarker
-        x={WORLD.ruinPos[0]}
-        z={WORLD.ruinPos[2]}
-        label="RUIN"
-        active={!ruinDone}
-      />
+      {OBJECTIVE_PIPS.map((pip) => (
+        <ObjectiveMarker key={pip.id} pip={pip} />
+      ))}
+      {dynamicMarkers.map((m) => (
+        <HintMarker key={m.id} marker={m} />
+      ))}
     </group>
   );
 }

@@ -95,8 +95,11 @@ export const INITIAL_OBJECTIVES: Objective[] = [
   {
     id: "ridge7",
     title: "Survey Ridge-7",
-    detail: "West ridge expedition. Plant a beacon at the overlook.",
+    detail:
+      "West ridge expedition, gate waiver required. Plant a beacon at the overlook.",
     done: false,
+    hidden: true,
+    tasking: "TASKING — Ridge-7 survey authorized. Waiver on file.",
   },
   {
     id: "journal3",
@@ -143,14 +146,19 @@ export const INITIAL_OBJECTIVES: Objective[] = [
   {
     id: "ruins",
     title: "Locate the southern ruin",
-    detail: "Follow EM gradient into the Titans.",
+    detail: "Follow the EM gradient south into the Titans until the alloy answers.",
     done: false,
+    hidden: true,
+    tasking: "TASKING — EM gradient resolves south. Ruin bearing logged.",
   },
   {
     id: "remember",
     title: "Enter the chamber",
     detail: "Catalog the alloy slab. Do not broadcast.",
     done: false,
+    hidden: true,
+    requires: ["ruins"],
+    tasking: "TASKING — chamber interior. Catalog it and withdraw.",
   },
 ];
 
@@ -195,6 +203,12 @@ export const INITIAL_CODEX: CodexEntry[] = [
     id: "ruins",
     title: "Pre-human ruins",
     body: "Dark alloy, ambient temperature match to certain neural interfaces. Star maps. One word: REMEMBER.",
+    unlocked: false,
+  },
+  {
+    id: "seal",
+    title: "Chamber seal",
+    body: "No seam, no mechanism, no response to a hand. The face answers a bearing the EM lattice already carries. Trace the gradient out from the colony foundations — Thornhill logs what pulls on it.",
     unlocked: false,
   },
   {
@@ -247,6 +261,12 @@ export const INITIAL_CODEX: CodexEntry[] = [
     body: "No unfiltered broadcasts. No naked ZPE. We hid and lived. The covenant is silence until something answers correctly.",
     unlocked: false,
     book2: true,
+  },
+  {
+    id: "broadcast",
+    title: "Open carrier",
+    body: "An uncollared transmission clears the atmosphere in minutes and does not stop. The star maps went out addressed to whatever kept them. Nothing answered on the first pass.",
+    unlocked: false,
   },
   {
     id: "ava",
@@ -348,7 +368,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         speaker: "Dr. Thornhill",
         text: "Something under the Titans is pulling on the lattice. Same band as certain neural-interface alloys from Earth.",
         choices: [
-          { label: "I'll recon the ruin.", next: "end", effect: "hint:ruins" },
+          {
+            label: "I'll recon the ruin.",
+            next: "end",
+            effect: "hint:ruins|reveal:ruins",
+          },
           { label: "Keep the cores quiet.", next: "end" },
         ],
       },
@@ -414,7 +438,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         speaker: "Adele Voss",
         text: "Western basalt spine. Survey B planted caches and a mast. Storms hit the ridge first.",
         choices: [
-          { label: "Authorize the trek.", next: "ridge", effect: "codex:ridge7" },
+          {
+            label: "Authorize the trek.",
+            next: "ridge",
+            effect: "codex:ridge7|reveal:ridge7",
+          },
           { label: "I'll stick to forest.", next: "end" },
         ],
       },
@@ -422,7 +450,11 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         speaker: "Adele Voss",
         text: "Authorized. Plant the expedition beacon at the overlook. Don't hero the ridge at night.",
         choices: [
-          { label: "Copy. Heading west.", next: "end", effect: "codex:ridge7|hint:ridge7" },
+          {
+            label: "Copy. Heading west.",
+            next: "end",
+            effect: "codex:ridge7|hint:ridge7|reveal:ridge7",
+          },
         ],
       },
       end: {

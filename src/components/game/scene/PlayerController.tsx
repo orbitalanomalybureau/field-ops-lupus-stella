@@ -58,6 +58,8 @@ export function PlayerController() {
   const staminaLocal = useRef(100);
   const audioTick = useRef(0);
   const stepAcc = useRef(0);
+  /** Rolling frame times, so QA can assert a framerate floor. */
+  const frameTimes = useRef<number[]>([]);
 
   const character = useGameStore((s) => s.getCharacter());
   const speedMul = character?.speed ?? 1;
@@ -114,6 +116,14 @@ export function PlayerController() {
     (window as unknown as { __controlsTest: unknown }).__controlsTest = {
       getYaw: () => yaw.current,
       getSpeed: () => vel.current.length(),
+      // Median rather than mean: one 200 ms shader-compile stall should not
+      // read as a framerate regression.
+      getFps: () => {
+        const samples = [...frameTimes.current].sort((a, b) => a - b);
+        if (!samples.length) return 0;
+        const median = samples[Math.floor(samples.length / 2)];
+        return median > 0 ? 1 / median : 0;
+      },
       setKeys: (codes: string[]) => {
         keys.current.clear();
         for (const c of codes) keys.current.add(c);
@@ -133,6 +143,7 @@ export function PlayerController() {
 
   useFrame((_, delta) => {
     const d = Math.min(delta, 0.05);
+    if (frameTimes.current.push(delta) > 120) frameTimes.current.shift();
     const g = group.current;
     if (!g) return;
     const phase = useGameStore.getState().phase;

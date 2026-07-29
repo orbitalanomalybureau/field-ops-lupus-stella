@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useGameStore } from "@/game/store";
 import { getAudio } from "@/game/audio";
 
@@ -8,6 +9,24 @@ export function Briefing() {
   const embed = useGameStore((s) => s.embedMode);
   const spoiler = useGameStore((s) => s.spoilerCeiling);
   const pending = useGameStore((s) => s.pendingSpawn);
+  const objectives = useGameStore((s) => s.objectives);
+  const revealed = useGameStore((s) => s.revealedObjectives);
+
+  // Mirrors visibleObjectives(): the brief must never preview a task the
+  // player has not yet earned the right to know about.
+  const open = useMemo(
+    () =>
+      objectives.filter(
+        (o) =>
+          !o.done &&
+          !o.optional &&
+          (!o.book2 || spoiler !== "book1") &&
+          (!o.hidden || revealed.includes(o.id)),
+      ),
+    [objectives, spoiler, revealed],
+  );
+  const preview = open.slice(0, 3);
+  const rest = open.length - preview.length;
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-void/95 px-4">
@@ -27,20 +46,34 @@ export function Briefing() {
           {pending ? ` · spawn mark: ${pending}` : ""}
         </p>
 
-        <ul className="mt-6 space-y-2.5 text-sm leading-relaxed text-muted">
-          <li>· Talk to colony staff; enter command dome for ops board.</li>
-          <li>· South perimeter, collars, ferns, optional fauna notes.</li>
-          <li>
-            · <strong className="text-fg">Q</strong> scan ·{" "}
-            <strong className="text-fg">J</strong> journal ·{" "}
-            <strong className="text-fg">P</strong> photo ·{" "}
-            <strong className="text-fg">K</strong> settings
-          </li>
-          <li>· West Ridge-7 beacon; weather ion storms carefully.</li>
-          {spoiler !== "book1" && (
-            <li>· South coast: Kaguyahime memorial (early Book II).</li>
+        <p className="mt-6 text-sm leading-relaxed text-muted">
+          You drop inside the wire. Colony staff are on shift and they talk —
+          leave the gate carrying something you were told, not something you
+          guessed.
+        </p>
+        <p className="mt-3 font-mono text-xs leading-relaxed text-muted">
+          <strong className="text-fg">WASD</strong> move ·{" "}
+          <strong className="text-fg">E</strong> interact ·{" "}
+          <strong className="text-fg">Q</strong> scan
+        </p>
+        <p className="mt-2 font-mono text-[10px] leading-relaxed text-dim">
+          REMAINING PROCEDURE IS ISSUED IN THE FIELD, WHERE IT APPLIES · ESC
+          LISTS THE FULL KEYMAP
+        </p>
+
+        <p className="mt-6 font-mono text-[10px] tracking-widest text-muted">
+          STANDING TASKS
+        </p>
+        <ul className="mt-2 space-y-1.5 text-sm leading-relaxed text-muted">
+          {preview.map((o) => (
+            <li key={o.id}>· {o.title}</li>
+          ))}
+          {rest > 0 && <li className="text-dim">· {rest} more on the sheet.</li>}
+          {open.length === 0 && (
+            <li className="text-dim">
+              · Sheet is clear. Walk it again or seal the log.
+            </li>
           )}
-          <li>· Southern ruin chamber — catalog. Do not broadcast.</li>
         </ul>
 
         <div className="mt-8 flex flex-wrap gap-3">

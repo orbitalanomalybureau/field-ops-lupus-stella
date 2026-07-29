@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { useGameStore } from "@/game/store";
+import { visibleObjectivesOf } from "@/game/selectors";
 
 export function PauseMenu() {
   const togglePause = useGameStore((s) => s.togglePause);
   const reset = useGameStore((s) => s.reset);
   const character = useGameStore((s) => s.getCharacter());
   const objectivesRaw = useGameStore((s) => s.objectives);
+  const revealed = useGameStore((s) => s.revealedObjectives);
   const spoiler = useGameStore((s) => s.spoilerCeiling);
   const openJournal = useGameStore((s) => s.openJournal);
   const togglePhoto = useGameStore((s) => s.togglePhotoMode);
   const [armed, setArmed] = useState(false);
 
   const objectives = useMemo(
-    () => objectivesRaw.filter((o) => !o.book2 || spoiler !== "book1"),
-    [objectivesRaw, spoiler],
+    () => visibleObjectivesOf(objectivesRaw, revealed, spoiler),
+    [objectivesRaw, revealed, spoiler],
   );
   const done = objectives.filter((o) => o.done).length;
 

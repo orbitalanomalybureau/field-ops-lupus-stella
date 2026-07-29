@@ -14,6 +14,7 @@
     "build": "vite build",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "vite build --mode development",
+    "build:preview": "FIELDOPS_NO_NITRO=1 vite build",
     "preview": "vite preview --host 0.0.0.0 --port 8080",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

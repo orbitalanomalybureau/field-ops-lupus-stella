@@ -39,7 +39,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run build
+      # The suite builds its own preset-free bundle (see playwright.config.ts);
+      # the Vercel output the verify job produces cannot be served locally.
       - run: npm test
         env:
           CI: "1"

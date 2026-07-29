@@ -9,10 +9,12 @@ import {
   SPAWNS,
 } from "./data";
 import { postToParent } from "@/lib/embed";
+import { passesCeiling, visibleObjectivesOf } from "./selectors";
 import type {
   AnimState,
   CharacterId,
   CodexEntry,
+  Ending,
   GamePhase,
   InteractPrompt,
   JournalEntry,
@@ -50,11 +52,20 @@ const HINT_MARKERS: Record<string, string> = {
   "hint:coast": "coast",
 };
 
+/**
+ * Scans that unlock tasking. Reading the lattice node is the second route to
+ * the ruin, for players who never ask Thornhill what pulls on it.
+ */
+const SCAN_REVEALS: Record<string, ObjectiveId> = {
+  "scan-grid": "ruins",
+};
+
 type SaveBlob = {
   version?: number;
   updatedAt?: number;
   characterId?: CharacterId | null;
   objectives?: Objective[];
+  revealedObjectives?: ObjectiveId[];
   codex?: CodexEntry[];
   scannedIds?: string[];
   cachesLooted?: string[];
@@ -64,6 +75,9 @@ type SaveBlob = {
   kaguyahimeLogged?: boolean;
   domeEntered?: boolean;
   ruinOpened?: boolean;
+  ruinSealed?: boolean;
+  packsAggroed?: boolean;
+  ending?: Ending | null;
   discoveries?: number;
   health?: number;
   stamina?: number;
@@ -84,6 +98,7 @@ type GameStore = {
   prevPhase: GamePhase | null;
   characterId: CharacterId | null;
   objectives: Objective[];
+  revealedObjectives: ObjectiveId[];
   codex: CodexEntry[];
   health: number;
   stamina: number;
@@ -100,6 +115,10 @@ type GameStore = {
   discoveries: number;
   messages: string[];
   ruinOpened: boolean;
+  ruinSealed: boolean;
+  /** Read by Creatures.tsx in a later phase: broadcasting wakes the packs. */
+  packsAggroed: boolean;
+  ending: Ending | null;
   playerPos: { x: number; y: number; z: number };
   playerYaw: number;
   playerSpeed: number;
@@ -130,6 +149,8 @@ type GameStore = {
   startMission: () => void;
   resumeMission: () => void;
   completeObjective: (id: ObjectiveId) => void;
+  revealObjective: (id: ObjectiveId) => void;
+  isObjectiveAvailable: (id: ObjectiveId) => boolean;
   unlockCodex: (id: string) => void;
   pushMessage: (msg: string) => void;
   setHealth: (h: number) => void;
@@ -161,6 +182,7 @@ type GameStore = {
   addDynamicMarker: (marker: WorldMarker) => void;
   openRuin: () => void;
   finishMission: () => void;
+  broadcastSignal: () => void;
   setEmbedMode: (v: boolean) => void;
   setSpoilerCeiling: (c: SpoilerCeiling) => void;
   addJournal: (title: string, body: string) => void;
@@ -187,7 +209,7 @@ function ceilingFilter<T extends { book2?: boolean }>(
   items: T[],
   ceiling: SpoilerCeiling,
 ): T[] {
-  return items.filter((i) => !i.book2 || ceiling !== "book1");
+  return items.filter((i) => passesCeiling(i, ceiling));
 }
 
 /** Objective text names three sites; the forest holds two of the four drops. */
@@ -218,6 +240,30 @@ function mergeObjectives(saved?: Objective[]): Objective[] {
   }));
 }
 
+/**
+ * Reveals are progress, not content. Saves written before the quest graph
+ * existed have no list, so anything already done — or whose prerequisites are
+ * all done — is treated as revealed rather than yanked out of the log. Hidden
+ * objectives with no prerequisites stay hidden: only a dialogue or a scan
+ * opens those.
+ */
+function mergeReveals(
+  objectives: Objective[],
+  saved?: ObjectiveId[],
+): ObjectiveId[] {
+  const known = new Set(objectives.map((o) => o.id));
+  const revealed = new Set((saved ?? []).filter((id) => known.has(id)));
+  const isDone = (id: ObjectiveId) =>
+    objectives.some((o) => o.id === id && o.done);
+  for (const o of objectives) {
+    if (!o.hidden) continue;
+    if (o.done || (o.requires?.length && o.requires.every(isDone))) {
+      revealed.add(o.id);
+    }
+  }
+  return Array.from(revealed);
+}
+
 function mergeCodex(saved?: CodexEntry[]): CodexEntry[] {
   const unlocked = new Map(
     (saved ?? []).map((c) => [c.id, Boolean(c.unlocked)] as const),
@@ -243,6 +289,9 @@ function applyEffect(get: () => GameStore, effect?: string) {
   if (!effect) return;
   for (const part of effect.split("|")) {
     if (part.startsWith("codex:")) get().unlockCodex(part.slice(6));
+    if (part.startsWith("reveal:")) {
+      get().revealObjective(part.slice(7) as ObjectiveId);
+    }
     if (part === "heal") {
       get().setHealth(100);
       get().setStamina(100);
@@ -267,6 +316,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   prevPhase: null,
   characterId: null,
   objectives: INITIAL_OBJECTIVES.map((o) => ({ ...o })),
+  revealedObjectives: [],
   codex: INITIAL_CODEX.map((c) => ({ ...c })),
   health: 100,
   stamina: 100,
@@ -283,6 +333,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   discoveries: 0,
   messages: [],
   ruinOpened: false,
+  ruinSealed: false,
+  packsAggroed: false,
+  ending: null,
   playerPos: { x: 0, y: 0, z: 40 },
   playerYaw: Math.PI,
   playerSpeed: 0,
@@ -389,6 +442,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const was = get().objectives.find((o) => o.id === id);
     if (!was || was.done) return;
     if (was.book2 && get().spoilerCeiling === "book1") return;
+    if (!get().isObjectiveAvailable(id)) return;
     set({
       objectives: get().objectives.map((o) =>
         o.id === id ? { ...o, done: true } : o,
@@ -396,7 +450,34 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
     get().pushMessage(`OBJECTIVE COMPLETE — ${was.title}`);
     get().addJournal(was.title, was.detail);
+    const isDone = (oid: ObjectiveId) =>
+      get().objectives.some((o) => o.id === oid && o.done);
+    for (const dep of get().objectives) {
+      const reqs = dep.requires;
+      if (!dep.hidden || !reqs?.includes(id)) continue;
+      if (reqs.every(isDone)) get().revealObjective(dep.id);
+    }
     get().persist();
+  },
+
+  revealObjective: (id) => {
+    const obj = get().objectives.find((o) => o.id === id);
+    if (!obj) return;
+    if (obj.book2 && get().spoilerCeiling === "book1") return;
+    if (get().revealedObjectives.includes(id)) return;
+    set({ revealedObjectives: [...get().revealedObjectives, id] });
+    get().pushMessage(obj.tasking ?? `TASKING — ${obj.title}`);
+    get().addJournal(`Tasking: ${obj.title}`, obj.detail);
+    get().persist();
+  },
+
+  isObjectiveAvailable: (id) => {
+    const obj = get().objectives.find((o) => o.id === id);
+    if (!obj) return false;
+    if (obj.hidden && !get().revealedObjectives.includes(id)) return false;
+    return (obj.requires ?? []).every((req) =>
+      get().objectives.some((o) => o.id === req && o.done),
+    );
   },
 
   unlockCodex: (id) => {
@@ -437,6 +518,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (get().scannedIds.includes(id)) return;
     const scannedIds = [...get().scannedIds, id];
     set({ scannedIds });
+    const reveal = SCAN_REVEALS[id];
+    if (reveal) get().revealObjective(reveal);
     if (scannedIds.length >= 3) get().completeObjective("scan");
     get().persist();
   },
@@ -495,6 +578,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   plantRidgeBeacon: () => {
     if (get().ridgeBeaconPlanted) return;
+    // Voss's clearance is the authorization; without it the beacon stays in
+    // the pack and the interaction remains available for a later trip.
+    if (!get().isObjectiveAvailable("ridge7")) {
+      get().pushMessage("GATE CONTROL — no waiver on file for Ridge-7");
+      return;
+    }
     set({ ridgeBeaconPlanted: true });
     get().completeObjective("ridge7");
     get().unlockCodex("ridge7");
@@ -593,6 +682,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   openRuin: () => {
+    // Reaching the ruin is not the same as earning it: the chamber only
+    // answers an operative who traced the gradient that leads here.
+    if (!get().isObjectiveAvailable("ruins")) {
+      const first = !get().ruinSealed;
+      set({ ruinSealed: true });
+      get().pushMessage("CHAMBER SEAL — NO RESPONSE");
+      if (first) get().unlockCodex("seal");
+      import("./audio").then(({ getAudio }) => getAudio().pulseAlert());
+      get().persist();
+      return;
+    }
     set({ ruinOpened: true, phase: "ruins" });
     get().completeObjective("ruins");
     get().unlockCodex("ruins");
@@ -603,13 +703,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
   finishMission: () => {
     get().completeObjective("remember");
     get().unlockCodex("signal");
-    set({ phase: "complete" });
+    set({ phase: "complete", ending: "silent" });
     get().pushMessage("LOG SEALED — REMEMBER");
     get().persist();
     const visible = get().visibleObjectives();
     postToParent({
       type: "fieldops:complete",
       ending: "silent",
+      objectives: visible.filter((o) => o.done).length,
+      total: visible.length,
+      discoveries: get().discoveries,
+    });
+  },
+
+  broadcastSignal: () => {
+    if (get().ending) return;
+    get().completeObjective("remember");
+    get().unlockCodex("broadcast");
+    get().setSignal(1);
+    get().setWeather("storm", 1);
+    set({ phase: "complete", ending: "broadcast", packsAggroed: true });
+    get().pushMessage("CARRIER OPEN — STAR MAPS TRANSMITTING");
+    get().pushMessage("QUIET PROTOCOL — VIOLATED");
+    get().persist();
+    const visible = get().visibleObjectives();
+    postToParent({
+      type: "fieldops:complete",
+      ending: "broadcast",
       objectives: visible.filter((o) => o.done).length,
       total: visible.length,
       discoveries: get().discoveries,
@@ -684,6 +804,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (op && CHARACTERS.some((c) => c.id === op)) {
       set({ characterId: op, phase: "briefing" });
     }
+    // QA only: `tod` and `wx` pin the world clock and the sky so golden
+    // screenshots are reproducible. Inert unless a test passes them.
+    const tod = params.get("tod");
+    if (tod !== null) {
+      const t = Number.parseFloat(tod);
+      if (Number.isFinite(t)) get().setTimeOfDay(Math.max(0, Math.min(1, t)));
+    }
+    const wx = params.get("wx");
+    if (wx === "clear" || wx === "haze" || wx === "rain" || wx === "storm") {
+      get().setWeather(wx);
+    }
     if (params.get("auto") === "1" && get().characterId) {
       get().startMission();
     }
@@ -714,6 +845,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       prevPhase: null,
       characterId: null,
       objectives: INITIAL_OBJECTIVES.map((o) => ({ ...o })),
+      revealedObjectives: [],
       codex: INITIAL_CODEX.map((c) => ({ ...c })),
       health: 100,
       stamina: 100,
@@ -730,6 +862,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       discoveries: 0,
       messages: [],
       ruinOpened: false,
+      ruinSealed: false,
+      packsAggroed: false,
+      ending: null,
       playerPos: { x: 0, y: 0, z: 40 },
       playerYaw: Math.PI,
       playerSpeed: 0,
@@ -767,6 +902,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           updatedAt: Date.now(),
           characterId: s.characterId,
           objectives: s.objectives,
+          revealedObjectives: s.revealedObjectives,
           codex: s.codex,
           scannedIds: s.scannedIds,
           cachesLooted: s.cachesLooted,
@@ -776,6 +912,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
           kaguyahimeLogged: s.kaguyahimeLogged,
           domeEntered: s.domeEntered,
           ruinOpened: s.ruinOpened,
+          ruinSealed: s.ruinSealed,
+          packsAggroed: s.packsAggroed,
+          ending: s.ending,
           discoveries: s.discoveries,
           health: s.health,
           stamina: s.stamina,
@@ -827,9 +966,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const data = readSave();
       if (!data) return;
       const spoilerCeiling = data.spoilerCeiling ?? "book1";
+      const objectives = mergeObjectives(data.objectives);
       set({
         characterId: data.characterId ?? null,
-        objectives: mergeObjectives(data.objectives),
+        objectives,
+        revealedObjectives: mergeReveals(objectives, data.revealedObjectives),
         codex: mergeCodex(data.codex),
         scannedIds: data.scannedIds ?? [],
         cachesLooted: data.cachesLooted ?? [],
@@ -842,6 +983,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         kaguyahimeLogged: data.kaguyahimeLogged ?? false,
         domeEntered: data.domeEntered ?? false,
         ruinOpened: data.ruinOpened ?? false,
+        ruinSealed: data.ruinSealed ?? false,
+        packsAggroed: data.packsAggroed ?? false,
+        ending: data.ending ?? null,
         discoveries: data.discoveries ?? 0,
         health: data.health ?? 100,
         stamina: data.stamina ?? 100,
@@ -867,7 +1011,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return CHARACTERS.find((c) => c.id === id) ?? null;
   },
 
-  visibleObjectives: () => ceilingFilter(get().objectives, get().spoilerCeiling),
+  /** Hidden tasking stays out of the log — and out of the completion total. */
+  visibleObjectives: () =>
+    visibleObjectivesOf(
+      get().objectives,
+      get().revealedObjectives,
+      get().spoilerCeiling,
+    ),
 
   visibleCodex: () => ceilingFilter(get().codex, get().spoilerCeiling),
 }));

@@ -3,6 +3,12 @@ import { useRef } from "react";
 import { NPCS, SCAN_TARGETS, WORLD } from "@/game/data";
 import { useGameStore } from "@/game/store";
 import { getAudio } from "@/game/audio";
+import type { ObjectiveId } from "@/game/types";
+
+/** Scan targets that unlock a quest node. Parallel to SCAN_TARGETS.codexId. */
+const SCAN_REVEALS: Record<string, ObjectiveId> = {
+  "scan-grid": "ruins",
+};
 
 function dist2(ax: number, az: number, bx: number, bz: number) {
   return Math.hypot(ax - bx, az - bz);
@@ -84,9 +90,12 @@ export function InteractionSystem() {
 
     const ruinD = dist2(x, z, WORLD.ruinPos[0], WORLD.ruinPos[2]);
     if (!store.ruinOpened) {
+      // openRuin() refuses the sealed chamber; the prompt must say so first.
+      const sealed = !store.isObjectiveAvailable("ruins");
+      const atDoor = ruinD < 7;
       consider({
-        label: "Enter chamber",
-        sub: ruinD < 7 ? "Press E" : "Approach",
+        label: sealed ? "Inspect chamber seal" : "Enter chamber",
+        sub: sealed ? "Alloy inert — seal holds" : atDoor ? "Press E" : "Approach",
         dist: ruinD,
         action: () => store.openRuin(),
       });
@@ -181,6 +190,8 @@ export function InteractionSystem() {
         if (scanHold.current >= need) {
           store.markScanned(nearest.id);
           if (nearest.codexId) store.unlockCodex(nearest.codexId);
+          const revealed = SCAN_REVEALS[nearest.id];
+          if (revealed) store.revealObjective(revealed);
           store.pushMessage(`SCAN COMPLETE — ${nearest.title}`);
           getAudio().pulseInteract();
           scanHold.current = 0;
@@ -197,8 +208,15 @@ export function InteractionSystem() {
       nearScanId.current = null;
     }
 
-    if (ruinD < 30) store.unlockCodex("ruins");
-    if (x < -70) store.unlockCodex("ridge7");
+    // Proximity codex unlocks are rewards for arriving somewhere, not a way
+    // around the gate: standing near the Titans must not hand over what the
+    // chamber is before the operative has traced the gradient to it.
+    if (ruinD < 30 && store.isObjectiveAvailable("ruins")) {
+      store.unlockCodex("ruins");
+    }
+    if (x < -70 && store.isObjectiveAvailable("ridge7")) {
+      store.unlockCodex("ridge7");
+    }
   });
 
   return null;

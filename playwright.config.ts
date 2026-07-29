@@ -49,12 +49,14 @@ export default defineConfig({
       },
     },
   ],
+  // Builds its own preset-free bundle: the Vercel output is one serverless
+  // function with no static HTML, so `vite preview` cannot serve it.
   webServer: process.env.FIELDOPS_BASE_URL
     ? undefined
     : {
-        command: `npm run preview -- --port ${PORT}`,
+        command: `npm run build:preview && npm run preview -- --port ${PORT}`,
         url: BASE_URL,
         reuseExistingServer: !process.env.CI,
-        timeout: 180_000,
+        timeout: 300_000,
       },
 });

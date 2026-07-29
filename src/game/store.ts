@@ -15,16 +15,20 @@ import { detectTier, isQualityTier, lowerTier } from "./quality";
 import type { QualityTier } from "./quality";
 import type {
   AnimState,
+  CharacterDef,
   CharacterId,
   CodexEntry,
+  DialogueChoice,
   Ending,
   GamePhase,
   InteractPrompt,
+  ItemId,
   JournalEntry,
   Objective,
   ObjectiveId,
   SpawnPoint,
   SpoilerCeiling,
+  UpgradeKey,
   WeatherKind,
   WorldMarker,
 } from "./types";
@@ -32,7 +36,7 @@ import type {
 const SAVE_KEY = "lupus-fieldops-v4";
 
 /** Bumped when the blob shape changes. Older blobs still load, best-effort. */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /** Keys from abandoned save schemas, swept on boot so they stop rotting. */
 const LEGACY_SAVE_KEYS = [
@@ -62,6 +66,87 @@ const HINT_MARKERS: Record<string, string> = {
 const SCAN_REVEALS: Record<string, ObjectiveId> = {
   "scan-grid": "ruins",
 };
+
+/** Where FURTHER READING points. Overridable per deploy (staging, UTM hosts). */
+const NOVEL_SITE_URL =
+  (import.meta.env?.VITE_NOVEL_SITE_URL as string | undefined) ??
+  "https://exodus2121.com";
+
+const ITEM_IDS: readonly ItemId[] = [
+  "fern-spore",
+  "fang-quill",
+  "prism-shard",
+  "collar-component",
+];
+
+function isItemId(v: string): v is ItemId {
+  return (ITEM_IDS as readonly string[]).includes(v);
+}
+
+/** Ticker line for the moment an item lands in the pack. */
+const ITEM_PICKUP: Record<ItemId, string> = {
+  "fern-spore": "SPECIMEN — fern spore vial sealed",
+  "fang-quill": "SPECIMEN — fang quill secured",
+  "prism-shard": "SPECIMEN — prism shard cased",
+  "collar-component": "SALVAGE — collar component recovered",
+};
+
+/** Plain names for ledger lines when a trade consumes stock. */
+const ITEM_NAMES: Record<ItemId, string> = {
+  "fern-spore": "fern spore",
+  "fang-quill": "fang quill",
+  "prism-shard": "prism shard",
+  "collar-component": "collar component",
+};
+
+const UPGRADE_KEYS: readonly UpgradeKey[] = [
+  "scan",
+  "stamina",
+  "combat",
+  "stealth",
+];
+
+function isUpgradeKey(v: string): v is UpgradeKey {
+  return (UPGRADE_KEYS as readonly string[]).includes(v);
+}
+
+/** What the field-mod ticker calls each upgrade track. */
+const UPGRADE_LABELS: Record<UpgradeKey, string> = {
+  scan: "scanner suite",
+  stamina: "endurance rig",
+  combat: "combat rig",
+  stealth: "field craft",
+};
+
+/**
+ * What a completed scan physically yields — the economy's inputs, keyed by
+ * SCAN_TARGETS id. InteractionSystem calls harvestScan alongside markScanned.
+ * Ferns carry charged spores only while the lattice pulse is up, so the fern
+ * harvest and the boosted-predator window are the same hours on purpose.
+ */
+const HARVEST_RULES: Record<string, { item: ItemId; nightOnly?: boolean }> = {
+  "scan-fern": { item: "fern-spore", nightOnly: true },
+  "scan-herd": { item: "prism-shard" },
+  "scan-collar": { item: "collar-component" },
+};
+
+/** The game's one definition of night — the window Creatures.tsx hunts in. */
+function isNight(timeOfDay: number): boolean {
+  return timeOfDay < 0.25 || timeOfDay > 0.78;
+}
+
+function emptyInventory(): Record<ItemId, number> {
+  return {
+    "fern-spore": 0,
+    "fang-quill": 0,
+    "prism-shard": 0,
+    "collar-component": 0,
+  };
+}
+
+function emptyUpgrades(): Record<UpgradeKey, number> {
+  return { scan: 0, stamina: 0, combat: 0, stealth: 0 };
+}
 
 /**
  * What a predator knows across reloads — "the planet remembers you". The
@@ -96,6 +181,10 @@ type SaveBlob = {
   fangQuills?: number;
   fangKills?: number;
   creatureMemory?: CreatureRecord[];
+  inventory?: Partial<Record<ItemId, number>>;
+  upgrades?: Partial<Record<UpgradeKey, number>>;
+  flags?: Record<string, boolean>;
+  codexStage?: Record<string, number>;
   ending?: Ending | null;
   discoveries?: number;
   health?: number;
@@ -140,11 +229,19 @@ type GameStore = {
   /** Set by the Broadcast ending: every pack hunts the operative from then
    * on, stealth radii ignored. Consumed by Creatures.tsx; persisted. */
   packsAggroed: boolean;
-  /** Harvested from fang carcasses; Phase 5's inventory will consume these. */
+  /** Lifetime quill count for stats; the spendable copy lives in inventory. */
   fangQuills: number;
   fangKills: number;
   /** Per-predator learnedBias/health snapshots, written by Creatures.tsx. */
   creatureMemory: CreatureRecord[];
+  /** Field-harvest counts — the economy Voss and Berger trade against. */
+  inventory: Record<ItemId, number>;
+  /** Permanent additive field mods, folded into getCharacter(). */
+  upgrades: { scan: number; stamina: number; combat: number; stealth: number };
+  /** Story memory: dialogue once-gates, setFlag verbs, world triggers. */
+  flags: Record<string, boolean>;
+  /** Highest stage reached per codex id; absent means stage 0 (base body). */
+  codexStage: Record<string, number>;
   ending: Ending | null;
   playerPos: { x: number; y: number; z: number };
   playerYaw: number;
@@ -190,7 +287,9 @@ type GameStore = {
   completeObjective: (id: ObjectiveId) => void;
   revealObjective: (id: ObjectiveId) => void;
   isObjectiveAvailable: (id: ObjectiveId) => boolean;
-  unlockCodex: (id: string) => void;
+  /** Unlocks at `stage` (default 0), or advances an already-unlocked entry to
+   * a higher stage; either transition posts fieldops:discovery to the host. */
+  unlockCodex: (id: string, stage?: number) => void;
   pushMessage: (msg: string) => void;
   setHealth: (h: number) => void;
   setStamina: (s: number) => void;
@@ -198,6 +297,15 @@ type GameStore = {
   setCombat: (v: boolean) => void;
   recordFangKill: () => void;
   recordFangQuill: () => void;
+  grantItem: (id: ItemId, n?: number) => void;
+  /** Removes up to `n`; stock floors at 0. The "take:" effect verb. */
+  takeItem: (id: ItemId, n?: number) => void;
+  /** Permanent bump on one upgrade track. The "upgrade:" effect verb. */
+  applyUpgrade: (key: UpgradeKey, amount: number) => void;
+  /** Sets a story flag true. The "flag:" verb and choice setFlag/once gates. */
+  raiseFlag: (name: string) => void;
+  /** Applies HARVEST_RULES for a completed scan; safe to call with any id. */
+  harvestScan: (targetId: string) => void;
   /** High-cadence caller: sets state only; autosave flushes it to the blob. */
   saveCreatureMemory: (records: CreatureRecord[]) => void;
   setScanner: (v: boolean) => void;
@@ -220,6 +328,9 @@ type GameStore = {
   exitDome: () => void;
   openDialogue: (npcId: string) => void;
   chooseDialogue: (choiceIndex: number) => void;
+  /** The current node's choices that pass their gates. `index` is the
+   * ORIGINAL index into node.choices — what chooseDialogue still takes. */
+  visibleChoices: () => { label: string; index: number }[];
   closeDialogue: () => void;
   applyDialogueEffect: (effect?: string) => void;
   addDynamicMarker: (marker: WorldMarker) => void;
@@ -228,7 +339,9 @@ type GameStore = {
   broadcastSignal: () => void;
   setEmbedMode: (v: boolean) => void;
   setSpoilerCeiling: (c: SpoilerCeiling) => void;
-  addJournal: (title: string, body: string) => void;
+  /** `authored` marks a note the operative wrote by hand; only those count
+   * toward the journal3 objective. */
+  addJournal: (title: string, body: string, authored?: boolean) => void;
   openJournal: () => void;
   closeOverlay: () => void;
   togglePhotoMode: () => void;
@@ -319,6 +432,103 @@ function mergeCodex(saved?: CodexEntry[]): CodexEntry[] {
   }));
 }
 
+function mergeInventory(
+  saved?: Partial<Record<ItemId, number>>,
+): Record<ItemId, number> {
+  const inventory = emptyInventory();
+  for (const id of ITEM_IDS) {
+    const v = saved?.[id];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      inventory[id] = Math.max(0, Math.floor(v));
+    }
+  }
+  return inventory;
+}
+
+function mergeUpgrades(
+  saved?: Partial<Record<UpgradeKey, number>>,
+): Record<UpgradeKey, number> {
+  const upgrades = emptyUpgrades();
+  for (const key of UPGRADE_KEYS) {
+    const v = saved?.[key];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      upgrades[key] = Math.max(0, v);
+    }
+  }
+  return upgrades;
+}
+
+function mergeFlags(
+  saved?: Record<string, boolean>,
+  characterId?: CharacterId | null,
+): Record<string, boolean> {
+  const flags: Record<string, boolean> = {};
+  for (const [name, v] of Object.entries(saved ?? {})) {
+    if (v === true) flags[name] = true;
+  }
+  // Command access derives from the operative, not from history — a save
+  // written before the flag existed still gets its command branches.
+  if ((CHARACTERS.find((c) => c.id === characterId)?.commandBonus ?? 1) > 1) {
+    flags["cmd-access"] = true;
+  }
+  return flags;
+}
+
+/**
+ * Stage progress is merged against data.ts content like everything else:
+ * unknown ids drop, and a stage clamps to the stages the entry has today, so
+ * a save from a build with deeper entries never points past the end.
+ */
+function mergeCodexStage(
+  saved?: Record<string, number>,
+): Record<string, number> {
+  const codexStage: Record<string, number> = {};
+  for (const entry of INITIAL_CODEX) {
+    const v = saved?.[entry.id];
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const max = entry.stages?.length ?? 0;
+    const stage = Math.max(0, Math.min(max, Math.floor(v)));
+    if (stage > 0) codexStage[entry.id] = stage;
+  }
+  return codexStage;
+}
+
+/**
+ * Dialogue-choice gate: "flagName" | "!flagName" | "item:<ItemId>>=<n>".
+ * Malformed conditions fail closed — a typo hides a choice rather than
+ * exposing a gated one.
+ */
+function passesCondition(s: GameStore, cond: string): boolean {
+  const item = /^item:([a-z-]+)>=(\d+)$/.exec(cond);
+  if (item) {
+    const id = item[1];
+    if (!isItemId(id)) return false;
+    return s.inventory[id] >= Number.parseInt(item[2], 10);
+  }
+  if (cond.startsWith("item:")) return false;
+  if (cond.startsWith("!")) return !s.flags[cond.slice(1)];
+  return Boolean(s.flags[cond]);
+}
+
+/** True when the choice may be listed — and taken; both paths share this. */
+function choiceVisible(s: GameStore, choice: DialogueChoice): boolean {
+  if (choice.once && s.flags[choice.once]) return false;
+  if (choice.if && !passesCondition(s, choice.if)) return false;
+  return true;
+}
+
+/**
+ * getCharacter() folds upgrades into a clone of the CHARACTERS entry. The
+ * clone is cached against the (characterId, upgrades) pair because HUD and
+ * PlayerController select `s.getCharacter()` — a fresh object per call would
+ * re-render them on every store write, including per-frame position updates.
+ */
+let characterCache: {
+  id: CharacterId;
+  upgrades: Record<UpgradeKey, number>;
+  value: CharacterDef;
+} | null = null;
+
 function beginPlay(get: () => GameStore) {
   get().persist();
   if (typeof window !== "undefined") {
@@ -328,12 +538,47 @@ function beginPlay(get: () => GameStore) {
   postToParent({ type: "fieldops:started", operative: get().characterId });
 }
 
+/**
+ * Dialogue effect verbs, "|"-separated:
+ *   codex:<id>[:<stage>]      unlock, or advance to a codex stage
+ *   reveal:<objectiveId>      open hidden tasking
+ *   heal                      full vitals
+ *   hint:<site>               drop a nav marker
+ *   give:<ItemId>:<n>         add to inventory
+ *   take:<ItemId>:<n>         remove from inventory, floored at 0
+ *   upgrade:<track>:<amount>  permanent field mod (scan|stamina|combat|stealth)
+ *   flag:<name>               raise a story flag
+ */
 function applyEffect(get: () => GameStore, effect?: string) {
   if (!effect) return;
   for (const part of effect.split("|")) {
-    if (part.startsWith("codex:")) get().unlockCodex(part.slice(6));
+    const seg = part.split(":");
+    if (seg[0] === "codex" && seg.length > 1) {
+      get().unlockCodex(
+        seg[1],
+        seg.length > 2 ? Number.parseInt(seg[2], 10) : undefined,
+      );
+    }
     if (part.startsWith("reveal:")) {
       get().revealObjective(part.slice(7) as ObjectiveId);
+    }
+    if ((seg[0] === "give" || seg[0] === "take") && seg.length > 1) {
+      const id = seg[1];
+      const n = seg.length > 2 ? Number.parseInt(seg[2], 10) : 1;
+      if (isItemId(id) && Number.isInteger(n) && n > 0) {
+        if (seg[0] === "give") get().grantItem(id, n);
+        else get().takeItem(id, n);
+      }
+    }
+    if (seg[0] === "upgrade" && seg.length > 2) {
+      const key = seg[1];
+      const amount = Number.parseFloat(seg[2]);
+      if (isUpgradeKey(key) && Number.isFinite(amount) && amount > 0) {
+        get().applyUpgrade(key, amount);
+      }
+    }
+    if (seg[0] === "flag" && seg.length > 1 && seg[1]) {
+      get().raiseFlag(seg[1]);
     }
     if (part === "heal") {
       get().setHealth(100);
@@ -381,6 +626,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   fangQuills: 0,
   fangKills: 0,
   creatureMemory: [],
+  inventory: emptyInventory(),
+  upgrades: emptyUpgrades(),
+  flags: {},
+  codexStage: {},
   ending: null,
   playerPos: { x: 0, y: 0, z: 40 },
   playerYaw: Math.PI,
@@ -483,7 +732,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
-  selectCharacter: (id) => set({ characterId: id, phase: "briefing" }),
+  selectCharacter: (id) => {
+    // Command authority is a dialogue key, not just a stat: staff branches
+    // gate on this flag, and it belongs to whoever carries command rank.
+    // Derived from the roster rather than hardcoding "theo" so a future
+    // command-tier operative inherits the access.
+    const cmd = (CHARACTERS.find((c) => c.id === id)?.commandBonus ?? 1) > 1;
+    set({
+      characterId: id,
+      phase: "briefing",
+      flags: { ...get().flags, "cmd-access": cmd },
+    });
+  },
 
   startMission: () => {
     const spawn = get().consumeSpawn();
@@ -556,18 +816,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
   },
 
-  unlockCodex: (id) => {
+  unlockCodex: (id, stage) => {
     const was = get().codex.find((c) => c.id === id);
-    if (!was || was.unlocked) return;
+    if (!was) return;
     if (was.book2 && get().spoilerCeiling === "book1") return;
-    set({
-      codex: get().codex.map((c) =>
-        c.id === id ? { ...c, unlocked: true } : c,
-      ),
-      discoveries: get().discoveries + 1,
-    });
-    get().pushMessage(`CODEX — ${was.title}`);
-    get().addJournal(`Codex: ${was.title}`, was.body.slice(0, 160));
+    const target = Math.max(
+      0,
+      Math.min(was.stages?.length ?? 0, Math.floor(stage ?? 0)),
+    );
+    const current = get().codexStage[id] ?? 0;
+    if (!was.unlocked) {
+      set({
+        codex: get().codex.map((c) =>
+          c.id === id ? { ...c, unlocked: true } : c,
+        ),
+        discoveries: get().discoveries + 1,
+        codexStage:
+          target > 0 ? { ...get().codexStage, [id]: target } : get().codexStage,
+      });
+      get().pushMessage(`CODEX — ${was.title}`);
+      get().addJournal(`Codex: ${was.title}`, was.body.slice(0, 160));
+    } else if (target > current) {
+      // Knowledge deepens: same entry, new stratum. Stage n reads stages[n-1].
+      set({ codexStage: { ...get().codexStage, [id]: target } });
+      get().pushMessage(`CODEX UPDATED — ${was.title}`);
+      const stageBody = was.stages?.[target - 1]?.body ?? was.body;
+      get().addJournal(`Codex update: ${was.title}`, stageBody.slice(0, 160));
+    } else {
+      return; // nothing new — no bridge message, no write
+    }
+    const chapter = was.chapterRef?.chapter;
+    postToParent(
+      chapter === undefined
+        ? { type: "fieldops:discovery", id, title: was.title }
+        : { type: "fieldops:discovery", id, title: was.title, chapter },
+    );
     get().persist();
   },
 
@@ -594,8 +877,42 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   recordFangQuill: () => {
+    // The stat counter predates the economy; both move together so lifetime
+    // stats stay honest while the inventory copy gets spent on upgrades.
     set({ fangQuills: get().fangQuills + 1 });
-    get().pushMessage("SPECIMEN — fang quill secured");
+    get().grantItem("fang-quill");
+  },
+
+  grantItem: (id, n = 1) => {
+    if (!Number.isFinite(n) || n <= 0) return;
+    set({ inventory: { ...get().inventory, [id]: get().inventory[id] + n } });
+    get().pushMessage(n > 1 ? `${ITEM_PICKUP[id]} ×${n}` : ITEM_PICKUP[id]);
+    get().persist();
+  },
+
+  takeItem: (id, n = 1) => {
+    if (!Number.isFinite(n) || n <= 0) return;
+    const spent = Math.min(get().inventory[id], n);
+    if (spent <= 0) return;
+    set({
+      inventory: { ...get().inventory, [id]: get().inventory[id] - spent },
+    });
+    get().pushMessage(`LEDGER — ${ITEM_NAMES[id]} ×${spent} expended`);
+    get().persist();
+  },
+
+  applyUpgrade: (key, amount) => {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    set({
+      upgrades: { ...get().upgrades, [key]: get().upgrades[key] + amount },
+    });
+    get().pushMessage(`FIELD MOD — ${UPGRADE_LABELS[key]} +${amount}`);
+    get().persist();
+  },
+
+  raiseFlag: (name) => {
+    if (!name || get().flags[name]) return;
+    set({ flags: { ...get().flags, [name]: true } });
     get().persist();
   },
 
@@ -613,6 +930,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (reveal) get().revealObjective(reveal);
     if (scannedIds.length >= 3) get().completeObjective("scan");
     get().persist();
+  },
+
+  harvestScan: (targetId) => {
+    const rule = HARVEST_RULES[targetId];
+    if (!rule) return;
+    if (rule.nightOnly && !isNight(get().timeOfDay)) {
+      get().pushMessage("SPECIMEN — spores inert by day; sample after dark");
+      return;
+    }
+    get().grantItem(rule.item);
   },
 
   lootCache: (id) => {
@@ -743,6 +1070,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().closeDialogue();
       return;
     }
+    // Gated choices are not merely unlisted — an index call cannot take them.
+    if (!choiceVisible(get(), choice)) return;
+    if (choice.once) get().raiseFlag(choice.once);
+    if (choice.setFlag) get().raiseFlag(choice.setFlag);
     applyEffect(get, choice.effect);
     if (choice.next && tree.nodes[choice.next]) {
       set({ dialogueNode: choice.next });
@@ -751,6 +1082,20 @@ export const useGameStore = create<GameStore>((set, get) => ({
     } else {
       get().closeDialogue();
     }
+  },
+
+  visibleChoices: () => {
+    const s = get();
+    const { dialogueNpcId, dialogueNode } = s;
+    if (!dialogueNpcId || !dialogueNode) return [];
+    const npc = NPCS.find((n) => n.id === dialogueNpcId);
+    if (!npc) return [];
+    const choices = DIALOGUES[npc.dialogueId]?.nodes[dialogueNode]?.choices;
+    if (!choices) return [];
+    return choices
+      .map((choice, index) => ({ choice, index }))
+      .filter(({ choice }) => choiceVisible(s, choice))
+      .map(({ choice, index }) => ({ label: choice.label, index }));
   },
 
   closeDialogue: () => {
@@ -827,7 +1172,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
-  addJournal: (title, body) => {
+  addJournal: (title, body, authored = false) => {
     const { x, z } = get().playerPos;
     const entry: JournalEntry = {
       id: `j-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -837,9 +1182,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       x,
       z,
     };
+    if (authored) entry.authored = true;
     const journal = [entry, ...get().journal].slice(0, 40);
     set({ journal });
-    if (journal.length >= 3) get().completeObjective("journal3");
+    // System log lines don't count; the objective asks for the operative's
+    // own hand.
+    if (journal.filter((j) => j.authored).length >= 3) {
+      get().completeObjective("journal3");
+    }
     get().persist();
   },
 
@@ -918,6 +1268,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
   exportJournal: () => {
     const s = get();
     const char = s.getCharacter();
+    // Every unlocked discovery that continues in the novel, one line per
+    // chapter, lowest first. This is the whole point of the funnel: the log
+    // the player carries out of the game ends where the book picks up.
+    const refs: { chapter: number; teaser: string }[] = [];
+    for (const c of s.visibleCodex()) {
+      if (c.unlocked && c.chapterRef) refs.push(c.chapterRef);
+    }
+    refs.sort((a, b) => a.chapter - b.chapter);
+    const reading: string[] = [];
+    const seen = new Set<number>();
+    for (const ref of refs) {
+      if (seen.has(ref.chapter)) continue;
+      seen.add(ref.chapter);
+      reading.push(
+        `Continue in 2121: EXODUS — Ch. ${ref.chapter}: ${ref.teaser}`,
+      );
+    }
     const lines = [
       "FIELD OPS JOURNAL — LUPUS STELLA",
       `Operative: ${char?.name ?? "unknown"}`,
@@ -930,6 +1297,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ),
       "",
       "— End of log — The dead do not correct the living.",
+      "",
+      "FURTHER READING",
+      ...reading,
+      NOVEL_SITE_URL,
     ];
     return lines.join("\n\n");
   },
@@ -962,6 +1333,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       fangQuills: 0,
       fangKills: 0,
       creatureMemory: [],
+      inventory: emptyInventory(),
+      upgrades: emptyUpgrades(),
+      flags: {},
+      codexStage: {},
       ending: null,
       playerPos: { x: 0, y: 0, z: 40 },
       playerYaw: Math.PI,
@@ -1015,6 +1390,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
           fangQuills: s.fangQuills,
           fangKills: s.fangKills,
           creatureMemory: s.creatureMemory,
+          inventory: s.inventory,
+          upgrades: s.upgrades,
+          flags: s.flags,
+          codexStage: s.codexStage,
           ending: s.ending,
           discoveries: s.discoveries,
           health: s.health,
@@ -1091,6 +1470,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         fangQuills: data.fangQuills ?? 0,
         fangKills: data.fangKills ?? 0,
         creatureMemory: data.creatureMemory ?? [],
+        inventory: mergeInventory(data.inventory),
+        upgrades: mergeUpgrades(data.upgrades),
+        flags: mergeFlags(data.flags, data.characterId),
+        codexStage: mergeCodexStage(data.codexStage),
         ending: data.ending ?? null,
         discoveries: data.discoveries ?? 0,
         health: data.health ?? 100,
@@ -1118,7 +1501,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   getCharacter: () => {
     const id = get().characterId;
-    return CHARACTERS.find((c) => c.id === id) ?? null;
+    if (!id) return null;
+    const base = CHARACTERS.find((c) => c.id === id);
+    if (!base) return null;
+    const upgrades = get().upgrades;
+    if (
+      characterCache &&
+      characterCache.id === id &&
+      characterCache.upgrades === upgrades
+    ) {
+      return characterCache.value;
+    }
+    // Clone — never mutate the CHARACTERS source — with upgrade bonuses
+    // already applied, so every existing consumer gets progression for free.
+    const value: CharacterDef = {
+      ...base,
+      scanBonus: base.scanBonus + upgrades.scan,
+      stamina: base.stamina + upgrades.stamina,
+      combatBonus: base.combatBonus + upgrades.combat,
+      stealth: base.stealth + upgrades.stealth,
+    };
+    characterCache = { id, upgrades, value };
+    return value;
   },
 
   /** Hidden tasking stays out of the log — and out of the completion total. */

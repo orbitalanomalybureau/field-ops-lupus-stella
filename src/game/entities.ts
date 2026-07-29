@@ -112,7 +112,35 @@ export const ENTITIES: WorldEntity[] = [
     interact: { label: "Log Kaguyahime memorial", radius: PICK_RADIUS },
     book2: true,
   },
-  { id: "carver-marker", x: 6, z: 38, kind: "memorial" },
+  {
+    id: "carver-marker",
+    x: 6,
+    z: 38,
+    kind: "memorial",
+    interact: { label: "Read Carver's marker", radius: PICK_RADIUS },
+  },
+
+  // Berger's salvage: a hull plate off the Verne, seven metres from his anchor
+  // at (-6, 32) — on the flat pad, clear of the storage box at (4, 22), the
+  // crate row along z 12–14, and the south-west dome shell.
+  {
+    id: "verne-plate",
+    x: -12,
+    z: 36,
+    kind: "memorial",
+    interact: { label: "Inspect Verne hull plate", radius: PICK_RADIUS },
+  },
+
+  // Hale's cold camp on the Ridge-7 flank, below the beacon overlook. Measured
+  // slopeAt(-101, 57) = 0.37 — comfortably under SLIDE_SLOPE, so the site is
+  // standable ground the player can read, not a slide trap.
+  {
+    id: "hale-camp",
+    x: -101,
+    z: 57,
+    kind: "memorial",
+    interact: { label: "Search Hale camp", radius: PICK_RADIUS },
+  },
   {
     id: "ruin",
     x: 18,

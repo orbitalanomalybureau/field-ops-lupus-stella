@@ -1,5 +1,6 @@
 import { ENTITIES } from "./entities";
 import type {
+  AvaTrigger,
   CharacterDef,
   CodexEntry,
   DialogueTree,
@@ -178,48 +179,91 @@ export const INITIAL_OBJECTIVES: Objective[] = [
   },
 ];
 
+/**
+ * Stage convention: `body` is stage 1 — what the first scan or conversation
+ * earns. `stages[0]` is stage 2, unlocked by the deeper event named in its
+ * `source`. `chapterRef` chapter numbers are placeholders pending manuscript
+ * alignment — see canon/CANON.md § Chapter references.
+ */
 export const INITIAL_CODEX: CodexEntry[] = [
   {
     id: "lupus",
     title: "Lupus Stella",
     body: "Wolf 1061c. Habitable. 1.15g. 28-hour day. Crimson seas under an amber sky. The ecosystem is not dormant. It is aggressive.",
     unlocked: true,
+    chapterRef: { chapter: 1, teaser: "the first amber dawn over a crimson sea" },
   },
   {
     id: "new-eden",
     title: "New Eden Colony",
     body: "Plateau settlement. Prefab domes, four ZPE generators under modulation collars, light towers, south field marker for John Carver.",
     unlocked: true,
+    chapterRef: { chapter: 3, teaser: "how the plateau was chosen, and what it cost" },
+  },
+  {
+    id: "carver",
+    title: "John Carver",
+    body: "Retrofit engineer, ZPE systems. Signed the collar retrofit off with Thornhill. Died holding the west collar out of cascade. The south field marker is his. Castillo trims the line to the gate; Thornhill keeps the drift low. Division of grief.",
+    unlocked: false,
+    chapterRef: { chapter: 7, teaser: "the shift Carver did not walk away from" },
   },
   {
     id: "titans",
     title: "Obsidian Titans",
     body: "Kilometer-scale canopy. Trunks four to five meters across. Bark like cooled lava. Pale inner wood where the skin cracks.",
     unlocked: false,
+    chapterRef: { chapter: 5, teaser: "first walk under a kilometer of canopy" },
   },
   {
     id: "ferns",
     title: "Lumina Ferns",
     body: "Blue-green understory. Synchronized pulse ~4.7 seconds. Matches planetary EM baseline within measurement error.",
     unlocked: false,
+    stages: [
+      {
+        body: "Storm observation: the pulse does not falter under ion rain — it stops. Fern beds black out the instant a cell crosses the treeline and resume in phase with the lattice, not with each other. The light was never theirs. They are indicators on a planetary circuit.",
+        source: "Field observation — ion storm blackout",
+      },
+    ],
+    chapterRef: { chapter: 6, teaser: "the night the understory kept time" },
   },
   {
     id: "prismhoof",
     title: "Prismhoof",
     body: "Herd fauna. Crystaline antler lattice refracts red-star light. Non-hostile unless cornered.",
     unlocked: false,
+    stages: [
+      {
+        body: "The antler lattice is shed and regrown by season; discarded laminae — prism shards — hold their refractive grade for months and grind finer than anything in colony stores. The herd tolerates a slow walker at two lengths. What it will not tolerate is a straight line. Approach on arcs.",
+        source: "Herd observation — extended contact",
+      },
+    ],
   },
   {
     id: "shadowfang",
     title: "Shadowfang",
     body: "Apex pack predator. Flanking, pattern learning, copper eyeshine. Coordinates with larger threats under stress.",
     unlocked: false,
+    stages: [
+      {
+        body: "Confirmed: the pack does not patrol — it solves. Repeated transits average into an intercept solution, and the pack waits on the solution, not the trail. Copper eyeshine at a crossing you have not reached yet is not a sighting. It is your own schedule, read back to you.",
+        source: "Route-learning confirmed in the field",
+      },
+    ],
+    chapterRef: { chapter: 8, teaser: "a hunt that went both ways" },
   },
   {
     id: "ruins",
     title: "Pre-human ruins",
     body: "Dark alloy, ambient temperature match to certain neural interfaces. Star maps. One word: REMEMBER.",
     unlocked: false,
+    stages: [
+      {
+        body: "Chamber interior: the alloy holds ambient temperature exactly. Not passive — regulating. The star maps chart systems no human survey has named, and the one legible word is an imperative with no addressee. The instruction predates its only readers. Someone expected us. Or expected someone.",
+        source: "Chamber survey — interior catalog",
+      },
+    ],
+    chapterRef: { chapter: 12, teaser: "the word under the Titans" },
   },
   {
     id: "seal",
@@ -239,17 +283,48 @@ export const INITIAL_CODEX: CodexEntry[] = [
     title: "Modulation collars",
     body: "Thornhill's retrofit. Flattens ZPE signatures to noise. Drift a few millihertz a night. The work that cost Carver.",
     unlocked: false,
+    stages: [
+      {
+        body: "Command channel: the published drift figure is two millihertz a night. True aggregate is eight and climbing since storm season. Cascade lock-in fails past forty. The night Carver died, the west collar read forty-three. Thornhill keeps both logs. Only one lets the colony sleep.",
+        source: "Thornhill — command channel",
+      },
+    ],
+    chapterRef: { chapter: 4, teaser: "the machines that keep a colony invisible" },
+  },
+  {
+    id: "verne",
+    title: "The Verne",
+    body: "Ark. Ballasted down under the islands, systems cold by choice — a ship that is not transmitting is not dead; she is holding her breath. Berger cut one plate off her forward frame before she went under and keeps it where the sun still finds it.",
+    unlocked: false,
   },
   {
     id: "grid",
     title: "EM lattice",
     body: "Planetary electromagnetic grid under the foundations. The forest keeps time with it. So does the chamber.",
     unlocked: false,
+    stages: [
+      {
+        body: "The lattice is not infrastructure — it is a clock. Fern pulse, chamber resonance, and nightly collar drift all beat against the same 4.7-second base. The colony did not build on silent ground. It built inside an instrument that is still being played.",
+        source: "Thornhill — lattice survey",
+      },
+    ],
   },
   {
     id: "ridge7",
     title: "Ridge-7",
     body: "Western basalt spine. Clear sightline toward the far continent. Expedition caches left by Survey Team B before the quiet protocol.",
+    unlocked: false,
+    stages: [
+      {
+        body: "Survey Team B's cache trail runs alpha, bravo, ridge, coast — four logs, one expedition. They went out under an open sky and came back refusing to use it. Read the logs in order. The ridge remembers them better than the gate ledger does.",
+        source: "Cache log recovery",
+      },
+    ],
+  },
+  {
+    id: "hale-camp",
+    title: "Hale camp",
+    body: "Cold expedition camp on the Ridge-7 flank. Weathered gear, seasons old. Every equipment tag reads HALE. Boot tracks leave the camp south, toward the Titans. No return trail. No other record.",
     unlocked: false,
   },
   {
@@ -257,6 +332,12 @@ export const INITIAL_CODEX: CodexEntry[] = [
     title: "Ion rain cells",
     body: "Storm fronts carry charged particulates. Comms degrade. Ferns go dark. Shadowfangs hunt in the noise.",
     unlocked: false,
+    stages: [
+      {
+        body: "Survived cell, logged: comms degrade before the rain falls; fern beds black out at the front line; fang activity climbs with the noise floor. Berger's lead indicators hold — ark metal first, then ozone like burnt citrus. Shelter is a decision made twenty minutes early or not at all.",
+        source: "Storm survival log",
+      },
+    ],
   },
   {
     id: "daycycle",
@@ -270,6 +351,13 @@ export const INITIAL_CODEX: CodexEntry[] = [
     body: "Far-continent Japanese ark colony. Cherry memorials at New Eden face their vector. Quiet protocol once kept both silent.",
     unlocked: false,
     book2: true,
+    stages: [
+      {
+        body: "The carrier answers analysis pings with valid handshakes and nothing else — a door held open by someone who will not speak first. The Office of the Voice logs every exchange. Two colonies, each waiting for the other to break a silence both survived by keeping.",
+        source: "Office of the Voice — carrier log",
+      },
+    ],
+    chapterRef: { chapter: 16, teaser: "the far shore answers" },
   },
   {
     id: "quiet",
@@ -277,6 +365,7 @@ export const INITIAL_CODEX: CodexEntry[] = [
     body: "No unfiltered broadcasts. No naked ZPE. We hid and lived. The covenant is silence until something answers correctly.",
     unlocked: false,
     book2: true,
+    chapterRef: { chapter: 15, teaser: "the doctrine gets its name" },
   },
   {
     id: "broadcast",
@@ -289,6 +378,7 @@ export const INITIAL_CODEX: CodexEntry[] = [
     title: "Ava interface",
     body: "Theo's neural suite. Half partner, half ghost of Promethei Terra. Field Ops routes low-band queries through her filters.",
     unlocked: false,
+    chapterRef: { chapter: 2, teaser: "what came home from Promethei Terra" },
   },
   {
     id: "command-dome",
@@ -353,18 +443,58 @@ export const NPCS: NpcDef[] = [
   },
 ];
 
+/**
+ * Tree convention since Phase 5: every tree starts at a short "hub" beat that
+ * reads the same to a stranger and a regular. The full first-meeting monologue
+ * (the pre-Phase-5 intro text, preserved verbatim) sits behind a `once:`
+ * "met-<npc>" choice, so it plays exactly once and the hub decongests on every
+ * later visit. Command branches gate on the "cmd-access" flag (seeded by the
+ * store when the operative is Theo). Trades carry their full cost/payoff on
+ * the initiating choice; the target node is the flavor receipt.
+ */
 export const DIALOGUES: Record<string, DialogueTree> = {
   "dlg-thornhill": {
     id: "dlg-thornhill",
     npcId: "thornhill",
-    start: "intro",
+    start: "hub",
     nodes: {
-      intro: {
+      hub: {
+        speaker: "Dr. Thornhill",
+        text: "Mind the cabling. Drift log is open — talk while I write.",
+        choices: [
+          { label: "Dr. Thornhill? ZPE systems?", once: "met-thornhill", next: "first" },
+          { label: "Walk me through the collars.", next: "collars" },
+          { label: "Any EM spike south?", next: "south" },
+          { label: "About Carver.", if: "met-thornhill", next: "carver" },
+          {
+            label: "Command channel, Doctor. The real drift numbers.",
+            if: "cmd-access",
+            once: "thornhill-cmd",
+            next: "drift-real",
+          },
+          {
+            label: "I recovered a collar component.",
+            if: "item:collar-component>=1",
+            once: "thornhill-component",
+            next: "component",
+            effect: "take:collar-component:1|codex:collars:2|flag:collar-evidence",
+          },
+          {
+            label: "Three fern spores for a filter recalibration.",
+            if: "item:fern-spore>=3",
+            once: "trade-thornhill-filter",
+            next: "trade-filter",
+            effect: "take:fern-spore:3|upgrade:scan:0.15",
+          },
+          { label: "I'll let you work.", next: "end" },
+        ],
+      },
+      first: {
         speaker: "Dr. Thornhill",
         text: "Collar drift is two millihertz overnight. Again. Carver would have recalibrated by hand before the shift change.",
         choices: [
           { label: "Walk me through the collars.", next: "collars" },
-          { label: "Any EM spike south?", next: "south" },
+          { label: "Who was Carver?", next: "carver" },
           { label: "I'll let you work.", next: "end" },
         ],
       },
@@ -374,12 +504,57 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         choices: [
           { label: "I'll inspect the nearest collar.", next: "end", effect: "codex:collars" },
           { label: "Why not shut them down?", next: "shutdown" },
+          { label: "How much drift before it matters?", next: "threshold" },
         ],
       },
       shutdown: {
         speaker: "Dr. Thornhill",
         text: "Cold cores kill us slow. Bare signatures kill us fast. Choose your speed.",
         choices: [{ label: "Understood.", next: "end", effect: "codex:collars" }],
+      },
+      threshold: {
+        speaker: "Dr. Thornhill",
+        text: "Lock-in holds to forty millihertz aggregate. Past that the cascade window opens and stays open. We have never crossed thirty-one. Officially.",
+        choices: [
+          { label: "Officially?", next: "official" },
+          { label: "Keep it under forty, Doctor.", next: "end", effect: "codex:collars" },
+        ],
+      },
+      official: {
+        speaker: "Dr. Thornhill",
+        text: "The published log is the one the colony can sleep on. Leave it there.",
+        choices: [
+          { label: "Leaving it.", next: "end", effect: "codex:collars" },
+          {
+            label: "Command override. The whole log.",
+            if: "cmd-access",
+            once: "thornhill-cmd",
+            next: "drift-real",
+          },
+        ],
+      },
+      "drift-real": {
+        speaker: "Dr. Thornhill",
+        text: "Ava flagged your channel the day you landed, Colonel — I assumed this conversation was coming. Published drift is two millihertz a night. True aggregate is eight and climbing since storm season. Lock-in fails at forty.",
+        choices: [
+          { label: "And the night Carver died?", next: "drift-real-2" },
+          {
+            label: "Understood. It stays with me.",
+            next: "end",
+            effect: "codex:collars:2|flag:knows-drift",
+          },
+        ],
+      },
+      "drift-real-2": {
+        speaker: "Dr. Thornhill",
+        text: "Forty-three. The west collar read forty-three, and he held it anyway. A colony that counts millihertz stops planting, Colonel. Fear is a signature too. It drifts.",
+        choices: [
+          {
+            label: "Your log, your call. For now.",
+            next: "end",
+            effect: "codex:collars:2|flag:knows-drift",
+          },
+        ],
       },
       south: {
         speaker: "Dr. Thornhill",
@@ -390,8 +565,44 @@ export const DIALOGUES: Record<string, DialogueTree> = {
             next: "end",
             effect: "hint:ruins|reveal:ruins",
           },
+          { label: "What is the lattice, exactly?", next: "lattice" },
           { label: "Keep the cores quiet.", next: "end" },
         ],
+      },
+      lattice: {
+        speaker: "Dr. Thornhill",
+        text: "A planetary electromagnetic grid, older than the foundations we poured on it. The forest keeps its clocks by it. We built inside a metronome, and some nights I think it counts us.",
+        choices: [{ label: "Logging it.", next: "end", effect: "codex:grid" }],
+      },
+      carver: {
+        speaker: "Dr. Thornhill",
+        text: "He signed the retrofit off with me. When the west collar went bad he was closer. That is the whole story, and it is not.",
+        choices: [
+          { label: "The south marker is his?", next: "carver-2" },
+          { label: "Understood.", next: "end" },
+        ],
+      },
+      "carver-2": {
+        speaker: "Dr. Thornhill",
+        text: "South field. Castillo keeps the line trimmed; I keep the drift low. Division of grief.",
+        choices: [
+          { label: "I'll walk the line he held.", next: "end", effect: "codex:carver" },
+        ],
+      },
+      component: {
+        speaker: "Dr. Thornhill",
+        text: "Where did you— no. Don't tell me. Give it here.",
+        choices: [{ label: "What is it?", next: "component-2" }],
+      },
+      "component-2": {
+        speaker: "Dr. Thornhill",
+        text: "West collar laminate, pre-retrofit stock. This piece failed under Carver's hands. I'll log it recovered. You log what it cost.",
+        choices: [{ label: "Logged.", next: "end" }],
+      },
+      "trade-filter": {
+        speaker: "Dr. Thornhill",
+        text: "Live spores hold the lattice baseline better than any reference crystal we shipped from Earth. Filter's recalibrated — your scanner now reads the world the way the world keeps time.",
+        choices: [{ label: "Appreciated, Doctor.", next: "end" }],
       },
       end: {
         speaker: "Dr. Thornhill",
@@ -402,15 +613,45 @@ export const DIALOGUES: Record<string, DialogueTree> = {
   "dlg-castillo": {
     id: "dlg-castillo",
     npcId: "castillo",
-    start: "intro",
+    start: "hub",
     nodes: {
-      intro: {
+      hub: {
+        speaker: "June Castillo",
+        text: "Sit down if you're bleeding. Talk fast if you're not.",
+        choices: [
+          { label: "Castillo? Perimeter med?", once: "met-castillo", next: "first" },
+          { label: "How's the colony holding?", next: "colony" },
+          { label: "Tell me about Carver.", next: "carver" },
+          { label: "I need a stim pack.", once: "stim-issued", next: "heal", effect: "heal" },
+          { label: "Another stim.", if: "stim-issued", next: "rationed" },
+          {
+            label: "Two fern spores for a dose.",
+            if: "item:fern-spore>=2",
+            next: "spore-trade",
+            effect: "take:fern-spore:2|heal|flag:castillo-spores",
+          },
+          {
+            label: "What do you make of these quills?",
+            if: "item:fang-quill>=1",
+            once: "castillo-quills",
+            next: "quills",
+          },
+          {
+            label: "You've seen my file. Promethei Terra.",
+            if: "cmd-access",
+            once: "castillo-promethei",
+            next: "promethei",
+          },
+          { label: "Stay sharp.", next: "end" },
+        ],
+      },
+      first: {
         speaker: "June Castillo",
         text: "You're upright. Good. Half the perimeter detail comes back with dust-burn and excuses.",
         choices: [
           { label: "How's the colony holding?", next: "colony" },
           { label: "Tell me about Carver.", next: "carver" },
-          { label: "I need a stim pack.", next: "heal" },
+          { label: "Just checking in.", next: "end" },
         ],
       },
       colony: {
@@ -419,17 +660,61 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         choices: [
           { label: "Keep them safe.", next: "end" },
           { label: "About Carver…", next: "carver" },
+          { label: "The kids?", next: "kids" },
         ],
+      },
+      kids: {
+        speaker: "June Castillo",
+        text: "Born here, or carried here small enough to sleep through the landing. They think amber is the only color a sky comes in. Keep it that way. Bring your reports home — leave the rest at the treeline.",
+        choices: [{ label: "Copy that.", next: "end" }],
       },
       carver: {
         speaker: "June Castillo",
         text: "John Carver died keeping a collar from cascading. The south marker is his. Don't salute it if you won't walk the line he held.",
-        choices: [{ label: "I walk it.", next: "end", effect: "codex:new-eden" }],
+        choices: [
+          { label: "I walk it.", next: "end", effect: "codex:new-eden|codex:carver" },
+        ],
       },
       heal: {
         speaker: "June Castillo",
-        text: "One dose. The forest already wants your pattern — don't hand it your vitals too.",
-        choices: [{ label: "Thanks.", next: "end", effect: "heal" }],
+        text: "One dose. The forest already wants your pattern — don't hand it your vitals too. And that's the free one, operative. Med stock is rationed between supply runs; after the next storm cell clears, come argue with me again.",
+        choices: [{ label: "Understood.", next: "end" }],
+      },
+      rationed: {
+        speaker: "June Castillo",
+        text: "Stock's rationed; charity was a one-dose program. Bring me live fern spores — the antiseptic fraction titrates out clean and I can stretch it. Two spores, one dose. The forest can pay for what the forest does.",
+        choices: [
+          { label: "I'll gather spores.", next: "end" },
+          {
+            label: "Take two now.",
+            if: "item:fern-spore>=2",
+            next: "spore-trade",
+            effect: "take:fern-spore:2|heal|flag:castillo-spores",
+          },
+        ],
+      },
+      "spore-trade": {
+        speaker: "June Castillo",
+        text: "Good spores — still holding their pulse. Titrating… there. Vitals green. The forest feeds you back, if you ask it right.",
+        choices: [{ label: "Thanks, doc.", next: "end" }],
+      },
+      quills: {
+        speaker: "June Castillo",
+        text: "Shadowfang dorsals. You took one head-on — either you're good or you're overdue. Keep three intact for Voss; her armorer has been begging laminate stock off med for a month.",
+        choices: [{ label: "Noted.", next: "end" }],
+      },
+      promethei: {
+        speaker: "June Castillo",
+        text: "…Colonel. Triage two, south ridge, Promethei Terra. I remember the arm coming in, and I remember it not slowing you down. Don't make me patch the rest of you to match.",
+        choices: [
+          { label: "The arm was the cheap part.", next: "promethei-2" },
+          { label: "Long time ago, Castillo.", next: "end" },
+        ],
+      },
+      "promethei-2": {
+        speaker: "June Castillo",
+        text: "That's what worries me. Cheap parts get spent.",
+        choices: [{ label: "Noted, doc.", next: "end" }],
       },
       end: {
         speaker: "June Castillo",
@@ -440,15 +725,40 @@ export const DIALOGUES: Record<string, DialogueTree> = {
   "dlg-voss": {
     id: "dlg-voss",
     npcId: "voss",
-    start: "intro",
+    start: "hub",
     nodes: {
-      intro: {
+      hub: {
+        speaker: "Adele Voss",
+        text: "The log is open. State your business.",
+        choices: [
+          { label: "Voss? Contracts and gate?", once: "met-voss", next: "first" },
+          { label: "Clear me for Ridge-7.", next: "ridge" },
+          { label: "What is Ridge-7?", next: "what" },
+          {
+            label: "Colonel Daniel. Skip the runaround.",
+            if: "cmd-access",
+            once: "voss-cmd",
+            next: "ridge-cmd",
+          },
+          { label: "Who was Survey Team B?", if: "met-voss", next: "survey-b" },
+          {
+            label: "Three fang quills for the armorer.",
+            if: "item:fang-quill>=3",
+            once: "trade-voss-combat",
+            next: "trade-combat",
+            effect: "take:fang-quill:3|upgrade:combat:0.1",
+          },
+          { label: "Why the ledger obsession?", if: "met-voss", next: "records" },
+          { label: "Just checking in.", next: "end" },
+        ],
+      },
+      first: {
         speaker: "Adele Voss",
         text: "Gate records don't care about bravery. They care about who left, who returned, and who signed the risk waiver.",
         choices: [
           { label: "Clear me for Ridge-7.", next: "ridge" },
           { label: "What is Ridge-7?", next: "what" },
-          { label: "Just checking in.", next: "end" },
+          { label: "Fair enough.", next: "end" },
         ],
       },
       what: {
@@ -474,6 +784,50 @@ export const DIALOGUES: Record<string, DialogueTree> = {
           },
         ],
       },
+      "ridge-cmd": {
+        speaker: "Adele Voss",
+        text: "…Colonel. Your waiver has been on file since you made landfall — command privilege, countersigned above my pay grade and most of the weather's. Ridge-7 is yours. Plant the beacon at the overlook. And Colonel: the ridge does not read rank.",
+        choices: [
+          {
+            label: "Noted. Heading west.",
+            next: "end",
+            effect: "codex:ridge7|hint:ridge7|reveal:ridge7",
+          },
+        ],
+      },
+      "survey-b": {
+        speaker: "Adele Voss",
+        text: "Eight names on the outbound log, before my time. Cache trail runs alpha, bravo, the ridge, the coast. Their return entry is one line: ALL IN. NO FURTHER TRANSMISSIONS. Nobody has ever amended it.",
+        choices: [
+          { label: "They all came back?", next: "survey-b-2" },
+          { label: "I'll read their caches.", next: "end" },
+        ],
+      },
+      "survey-b-2": {
+        speaker: "Adele Voss",
+        text: "All eight. Walking, dark, three weeks overdue, and not one of them filed so much as a weather note afterward. Recover the caches and I can finally amend the record. That's not sentiment — open files rot.",
+        choices: [
+          { label: "I'll close the file.", next: "end", effect: "flag:voss-surveyb" },
+        ],
+      },
+      "trade-combat": {
+        speaker: "Adele Voss",
+        text: "Quills to the armorer, plates to the press. Collect them on your way out — hard plates re-laminated with fang laminate. There's a poem in that. The log says I didn't say so.",
+        choices: [{ label: "Appreciated.", next: "end" }],
+      },
+      records: {
+        speaker: "Adele Voss",
+        text: "Because memory dies and the ledger doesn't. Every name that ever crossed this gate is in it, and every one of them comes back — one column or the other.",
+        choices: [
+          { label: "Which column am I in?", next: "records-2" },
+          { label: "Fair.", next: "end" },
+        ],
+      },
+      "records-2": {
+        speaker: "Adele Voss",
+        text: "Open entry. Keep it that way.",
+        choices: [{ label: "Plan to.", next: "end" }],
+      },
       end: {
         speaker: "Adele Voss",
         text: "Log your exit. Log your return. The dead don't get to correct the paperwork.",
@@ -483,15 +837,33 @@ export const DIALOGUES: Record<string, DialogueTree> = {
   "dlg-berger": {
     id: "dlg-berger",
     npcId: "berger",
-    start: "intro",
+    start: "hub",
     nodes: {
-      intro: {
+      hub: {
+        speaker: "Berger",
+        text: "Hear that? …No? Good. Means you've still got time.",
+        choices: [
+          { label: "Berger? The ark engineer?", once: "met-berger", next: "first" },
+          { label: "Storm protocol?", next: "storm" },
+          { label: "How's the Verne hull?", next: "verne" },
+          { label: "That hull plate by your bench —", if: "met-berger", next: "plate" },
+          {
+            label: "Two prism shards for a servo tune.",
+            if: "item:prism-shard>=2",
+            once: "trade-berger-servo",
+            next: "trade-servo",
+            effect: "take:prism-shard:2|upgrade:stamina:0.1",
+          },
+          { label: "Keep an ear out.", next: "end" },
+        ],
+      },
+      first: {
         speaker: "Berger",
         text: "Ark metal sings when the ion front is twenty minutes out. You learn to hear it or you learn the hard way.",
         choices: [
           { label: "Storm protocol?", next: "storm" },
           { label: "How's the Verne hull?", next: "verne" },
-          { label: "Keep an ear out.", next: "end" },
+          { label: "Good ear.", next: "end" },
         ],
       },
       storm: {
@@ -499,12 +871,46 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         text: "When the sky goes copper and the ferns black out, get off high ground. Fangs hunt the noise. Towers are islands.",
         choices: [
           { label: "I'll weather one.", next: "end", effect: "codex:weather|hint:storm" },
+          { label: "How do you hear it coming?", next: "ozone" },
+        ],
+      },
+      ozone: {
+        speaker: "Berger",
+        text: "Front pushes charge ahead of itself. Ark metal picks it up first, then your fillings, then the ferns go dark. By the time you smell burnt citrus you've already spent half your lead.",
+        choices: [
+          { label: "I'll trust the metal.", next: "end", effect: "codex:weather" },
         ],
       },
       verne: {
         speaker: "Berger",
         text: "She's quiet under the islands now. We hid and lived. That was the whole strategy.",
-        choices: [{ label: "Hard lesson.", next: "end" }],
+        choices: [
+          { label: "Hard lesson.", next: "end" },
+          { label: "Under the islands — intact?", next: "islands" },
+        ],
+      },
+      islands: {
+        speaker: "Berger",
+        text: "Intact where it counts. She ballasted down easy and went cold by choice. A ship that isn't transmitting isn't dead — she's holding her breath. Same as the colony. Silence is just another hull. You keep it patched.",
+        choices: [
+          { label: "And if the hull cracks?", next: "doubt" },
+          { label: "Hard way to keep a ship.", next: "end", effect: "codex:verne" },
+        ],
+      },
+      doubt: {
+        speaker: "Berger",
+        text: "Then you learn what's outside. I re-rivet the quiet every day, same as I did her frames. Ask Tomas for the theology; I just do the maintenance.",
+        choices: [{ label: "Maintenance it is.", next: "end" }],
+      },
+      plate: {
+        speaker: "Berger",
+        text: "Frame seven, forward. Cut it off her myself before ballast-down. A ship that size, you keep one piece where the sun still finds it. Don't call it sentiment — call it a maintenance schedule for remembering.",
+        choices: [{ label: "Maintenance. Sure.", next: "end", effect: "codex:verne" }],
+      },
+      "trade-servo": {
+        speaker: "Berger",
+        text: "Prism lattice grinds finer than anything in stores. Servo races have never run this smooth — suit'll carry you another klick before it complains. Don't waste the klick.",
+        choices: [{ label: "Won't waste it.", next: "end" }],
       },
       end: {
         speaker: "Berger",
@@ -515,9 +921,21 @@ export const DIALOGUES: Record<string, DialogueTree> = {
   "dlg-tomas": {
     id: "dlg-tomas",
     npcId: "tomas",
-    start: "intro",
+    start: "hub",
     nodes: {
-      intro: {
+      hub: {
+        speaker: "Tomas",
+        text: "You walk loudly, operative, for someone living under a covenant of quiet.",
+        choices: [
+          { label: "Tomas. Office of the Voice.", once: "met-tomas", next: "first" },
+          { label: "Explain quiet protocol.", next: "quiet" },
+          { label: "Kaguyahime?", next: "kaguya" },
+          { label: "What does the Voice listen for?", if: "met-tomas", next: "listen" },
+          { label: "The chamber's word. REMEMBER.", if: "met-tomas", next: "remember" },
+          { label: "I should go.", next: "end" },
+        ],
+      },
+      first: {
         speaker: "Tomas",
         text: "The Voice does not shout. We listen for patterns that are not ours — then we decide if answering is survival or invitation.",
         choices: [
@@ -529,9 +947,7 @@ export const DIALOGUES: Record<string, DialogueTree> = {
       quiet: {
         speaker: "Tomas",
         text: "No naked broadcasts. No uncollared cores. The lattice already knows we are here. We do not teach it our names.",
-        choices: [
-          { label: "Understood.", next: "end", effect: "codex:quiet" },
-        ],
+        choices: [{ label: "Understood.", next: "end", effect: "codex:quiet" }],
       },
       kaguya: {
         speaker: "Tomas",
@@ -542,6 +958,35 @@ export const DIALOGUES: Record<string, DialogueTree> = {
             next: "end",
             effect: "codex:kaguyahime|hint:coast",
           },
+          { label: "The cherry memorials?", next: "cherry" },
+        ],
+      },
+      cherry: {
+        speaker: "Tomas",
+        text: "Grown from stock the Kaguyahime carried out of Earth's orchards. They plant theirs facing our vector; we plant ours facing theirs. Two shores, promising one another they exist, in a language nothing else can read.",
+        choices: [{ label: "Flowers as doctrine.", next: "end" }],
+      },
+      listen: {
+        speaker: "Tomas",
+        text: "Patterns with intent. The lattice hums and the ferns keep its time — that is the planet talking to itself. We listen for anything that talks to us.",
+        choices: [
+          { label: "Has anything?", next: "listen-2" },
+          { label: "Keep listening.", next: "end" },
+        ],
+      },
+      "listen-2": {
+        speaker: "Tomas",
+        text: "Once. Before the doctrine had a name. Ask the gate ledger about Survey Team B — then ask why their final entry is a promise not to speak.",
+        choices: [
+          { label: "I'll read their caches.", next: "end", effect: "flag:tomas-surveyb" },
+        ],
+      },
+      remember: {
+        speaker: "Tomas",
+        text: "An imperative addressed to no one — or to any audience at all. The Voice files it as the oldest transmission on this world. We are careful not to be the ones who answer it.",
+        choices: [
+          { label: "Careful how?", next: "quiet" },
+          { label: "Noted.", next: "end" },
         ],
       },
       end: {
@@ -702,3 +1147,108 @@ export const WORLD = {
   fernPulse: 4.7,
   dayLengthSec: 480,
 };
+
+/**
+ * Survey Team B's cache logs — a serialized found-document story, one fragment
+ * per cache, keyed by the cache's entity id. Read in order (alpha, bravo,
+ * ridge, coast) they explain why the expedition went silent; the coast
+ * fragment carries the reveal and ships behind the same book2 gate as its
+ * cache. Canon: canon/CANON.md § Survey Team B.
+ */
+export const CACHE_LOGS: Record<string, { title: string; body: string }> = {
+  "cache-a": {
+    title: "Survey B — log 1 of 4",
+    body: "Outbound, day one. Eight of us, full kit, relay mast in three loads. Treeline crossed at amber-high. The fern beds pulse together — I timed it myself: 4.7 seconds, steady as a ship's clock. Ferrandiz says the forest is listening politely. We laughed. Cache placed per doctrine, a quarter of everything, buried dry. If you are reading this, we are ahead of you. Follow the masts. — S. Okafor, lead",
+  },
+  "cache-b": {
+    title: "Survey B — log 2 of 4",
+    body: "Day four. The herd moved around us in arcs all morning — never closer, never farther. Ferrandiz swears the same three fangs have crossed our back-trail at the same hour, two days running. Same hour. We vary the route; they vary with us, one day behind. Instruments drift near the big trees — something under the floor pulls the needles. Cache placed. Moving west for the ridge, faster than planned. — S.O.",
+  },
+  "cache-r": {
+    title: "Survey B — log 3 of 4",
+    body: "Day nine. Ridge-7. Mast up at first light, and the far continent answered our test tone with clean carrier. Kaguyahime is alive. Eight people wept on a basalt spine and I am not sorry. Tomorrow we take the relay down the south face to the water and open a proper channel — voice, not tones. History, if the weather holds. Cache placed at the overlook. Wish us luck. — S.O.",
+  },
+  "cache-c": {
+    title: "Survey B — final log",
+    body: "We opened the channel at dawn. Kaguyahime answered — and then something else did, on the same band, underneath. It repeated our own handshake back to us with fourteen seconds missing. Ferrandiz ran the gap twice: nothing lost, something removed. We cut power, buried the relay under this cache, and we are walking home dark. All in. No further transmissions. If you found this: do not open the channel. Do not answer the quiet. — S. Okafor, last entry",
+  },
+};
+
+/**
+ * Fixed-site lore, keyed by interactable entity id. `codex` names the entry
+ * unlocked on first read. Hale content deliberately asserts nothing beyond a
+ * name on equipment tags and a direction of travel — see canon/CANON.md § Hale.
+ */
+export const SITE_LOGS: Record<
+  string,
+  { title: string; body: string; codex?: string }
+> = {
+  "carver-marker": {
+    title: "South field marker",
+    body: "JOHN CARVER. ZPE RETROFIT. HE HELD THE COLLAR. A hand-cut basalt slab, edges worked smooth by weather and by visitors. Someone keeps the line to the gate trimmed. Someone else leaves fresh solder wire twisted at the base — engineer's flowers. The colony does not salute the marker. The colony walks the line the marker holds.",
+    codex: "carver",
+  },
+  "verne-plate": {
+    title: "Verne hull plate",
+    body: "A meter of ark hull, frame seven forward, mounted where the sun crosses it. Scoured to bare metal by the long dark and one atmosphere entry — except one corner: original paint, hand-caulked against the weather, stencil letters half surviving. VERN—. Berger's bench faces the plate. The bench, not the colony.",
+    codex: "verne",
+  },
+  "hale-camp": {
+    title: "Cold camp — Ridge-7",
+    body: "One shelter frame, collapsed with its guylines still cleated — struck in a hurry, or never struck at all. Ration foils gone brittle, seasons old. A survey tripod with no instrument on it. Every equipment tag is stamped the same way: HALE. No log. No marker. No remains. Boot tracks leave the camp south, off the ridge, toward the Titans. Nothing tracks back.",
+    codex: "hale-camp",
+  },
+};
+
+/**
+ * Firewatch-style comms layer. Theo hears Ava (dry, protective, half a ghost
+ * of Promethei Terra); every other operative hears the colony net (pure
+ * procedure). One entry per trigger; the store owns when triggers fire.
+ */
+export const AVA_LINES: { trigger: AvaTrigger; ava: string; net: string }[] = [
+  {
+    trigger: "treeline",
+    ava: "Treeline. The ferns will read you before the fangs do. Walk like you're a rumor.",
+    net: "PERIM — treeline crossed. Log route and ETA.",
+  },
+  {
+    trigger: "tracked",
+    ava: "Two contacts folding in behind your last three waypoints. They're not following you, Theo — they're finishing your sentence. Change the ending.",
+    net: "THREAT — pattern shadow on operative route. Vary transit. Break pattern.",
+  },
+  {
+    trigger: "storm-in",
+    ava: "Ion cell inbound. I lose fidelity in the noise — which I hate — and the fangs gain it. Walls, Theo. Find some.",
+    net: "WX — ion cell inbound. Seek hard shelter. Comms degradation expected.",
+  },
+  {
+    trigger: "ruin-near",
+    ava: "That alloy is running at the same temperature I am. I have opinions about that. None of them are 'go closer.' You're going closer.",
+    net: "NAV — anomaly perimeter. Catalog and withdraw. No transmission.",
+  },
+  {
+    trigger: "nightfall",
+    ava: "Nightfall. The lattice gets loud and everything that hunts goes quiet. Survey window's open. So is everything else's.",
+    net: "OPS — dark cycle begins. Bioluminescence at peak. Predator activity elevated.",
+  },
+  {
+    trigger: "first-kill",
+    ava: "It's down. Log the specimen and keep your hands steady — the first one is supposed to cost something. Promethei taught us what it costs when it stops costing.",
+    net: "CONTACT — hostile neutralized. Recover specimen material. Report expenditure.",
+  },
+  {
+    trigger: "ambush-seen",
+    ava: "Eyeshine at your usual crossing — ahead of you, not behind. They solved your route, Theo. Be flattered somewhere else.",
+    net: "THREAT — ambush posture at learned position. Reroute. Do not engage on their ground.",
+  },
+  {
+    trigger: "coast",
+    ava: "The memorial faces the far shore. They planted trees at each other through all the quiet years. I keep an archive of everything I'm not allowed to say to that carrier. It rhymes.",
+    net: "NAV — coast memorial. Log and observe. Carrier band is receive-only.",
+  },
+  {
+    trigger: "broadcast",
+    ava: "If you open this carrier, everything that has ever listened learns our name in one pass. I'll transmit clean — that's my job. Objecting first is also my job.",
+    net: "ALERT — uncollared transmission requested. Doctrine conflict. Confirm authorization.",
+  },
+];

@@ -96,12 +96,14 @@ function SensorMast() {
 function QuestMarker({ x, z, label, active }: { x: number; z: number; label: string; active: boolean }) {
   const y = sampleHeight(x, z);
   const ref = useRef<THREE.Group>(null);
+  // Photographs are diegetic artifacts; navigation chrome must not be in them.
+  const photo = useGameStore((s) => s.photoMode);
   useFrame(({ clock }) => {
     if (ref.current) {
       ref.current.position.y = y + 3.2 + Math.sin(clock.elapsedTime * 2.2) * 0.25;
     }
   });
-  if (!active) return null;
+  if (!active || photo) return null;
   return (
     <group ref={ref} position={[x, y + 3.2, z]}>
       <mesh>

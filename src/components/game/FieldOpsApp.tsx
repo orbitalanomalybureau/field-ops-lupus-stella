@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useGameStore } from "@/game/store";
 import type { GamePhase } from "@/game/types";
 import { onHostMessage, postToParent } from "@/lib/embed";
+import { track } from "@/lib/telemetry";
+import { AvaComms } from "./AvaComms";
 import { BootScreen, InsertionTransition } from "./overlays/BootScreen";
 import { CharacterSelect } from "./overlays/CharacterSelect";
 import { Briefing } from "./overlays/Briefing";
@@ -11,6 +13,7 @@ import { CompleteScreen } from "./overlays/CompleteScreen";
 import { RuinModal } from "./overlays/RuinModal";
 import { ClickToPlay } from "./overlays/ClickToPlay";
 import { PauseMenu } from "./overlays/PauseMenu";
+import { PhotoMode } from "./overlays/PhotoMode";
 import { DialogueModal } from "./overlays/DialogueModal";
 import { JournalPanel } from "./overlays/JournalPanel";
 import { SettingsPanel } from "./overlays/SettingsPanel";
@@ -47,9 +50,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   const [mounted, setMounted] = useState(false);
   const [inserting, setInserting] = useState(false);
   const insertionSpent = useRef(false);
-  const [GameCanvas, setGameCanvas] = useState<null | React.ComponentType>(
-    null,
-  );
+  const [GameCanvas, setGameCanvas] = useState<null | React.ComponentType>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -65,17 +66,37 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
     if (skipBoot || embed) {
       if (useGameStore.getState().phase === "boot") setPhase("select");
     }
-  }, [
-    setPhase,
-    setEmbedMode,
-    embed,
-    skipBoot,
-    hydrate,
-    initPreferences,
-    applyDeepLink,
-  ]);
+  }, [setPhase, setEmbedMode, embed, skipBoot, hydrate, initPreferences, applyDeepLink]);
 
   useEffect(() => startAutosave(), [startAutosave]);
+
+  // Funnel instrumentation (Phase 5). Declared after the mount effect on
+  // purpose: hydrate() has already replaced the objectives array by the time
+  // this subscribes, so a restored save's finished objectives do not replay
+  // as fresh completions on every page load.
+  useEffect(() => {
+    track("boot", { embed: embed ? 1 : 0 });
+    return useGameStore.subscribe((s, prev) => {
+      if (s.characterId && s.characterId !== prev.characterId) {
+        track("select_operative", { operative: s.characterId });
+      }
+      if (WORLD_PHASES.includes(s.phase) && !WORLD_PHASES.includes(prev.phase)) {
+        track("deploy", { operative: s.characterId ?? "unknown" });
+      }
+      if (s.objectives !== prev.objectives) {
+        for (const o of s.objectives) {
+          if (!o.done) continue;
+          const before = prev.objectives.find((p) => p.id === o.id);
+          if (before && !before.done) {
+            track("objective_complete", { id: o.id });
+          }
+        }
+      }
+      if (s.ending && s.ending !== prev.ending) {
+        track("ending", { ending: s.ending });
+      }
+    });
+  }, [embed]);
 
   const finishBoot = useCallback(() => {
     if (useGameStore.getState().phase === "boot") setPhase("select");
@@ -166,9 +187,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
 
   const inWorld = WORLD_PHASES.includes(phase);
 
-  const showHud =
-    (phase === "playing" || phase === "ruins" || phase === "dialogue") &&
-    !photoMode;
+  const showHud = (phase === "playing" || phase === "ruins" || phase === "dialogue") && !photoMode;
 
   return (
     <div
@@ -176,17 +195,16 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
       data-fieldops-embed={embed ? "1" : "0"}
     >
       {inWorld && GameCanvas && (
-        <div className="absolute inset-0">
+        // data attribute: how PhotoMode finds the WebGL canvas to read back
+        // without importing anything from the lazily loaded scene chunk.
+        <div className="absolute inset-0" data-fieldops-canvas>
           <GameCanvas />
         </div>
       )}
+      {inWorld && <AvaComms />}
 
-      {phase === "boot" && !skipBoot && !embed && (
-        <BootScreen onDone={finishBoot} />
-      )}
-      {(phase === "select" || (phase === "boot" && (skipBoot || embed))) && (
-        <CharacterSelect />
-      )}
+      {phase === "boot" && !skipBoot && !embed && <BootScreen onDone={finishBoot} />}
+      {(phase === "select" || (phase === "boot" && (skipBoot || embed))) && <CharacterSelect />}
       {phase === "briefing" && <Briefing />}
       {showHud && (
         <>
@@ -197,20 +215,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
       )}
       {inWorld && !photoMode && <Tutorial />}
       {inWorld && <KeybindOverlay />}
-      {phase === "photo" && (
-        <>
-          <button
-            type="button"
-            onClick={togglePhoto}
-            className="absolute right-3 top-3 z-40 min-h-11 min-w-11 rounded-md border border-border bg-surface/70 px-3 font-mono text-[10px] tracking-[0.2em] text-muted backdrop-blur-sm hover:text-fg"
-          >
-            EXIT
-          </button>
-          <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-fg/70">
-            PHOTO MODE · P to exit
-          </div>
-        </>
-      )}
+      {phase === "photo" && <PhotoMode />}
       {phase === "paused" && <PauseMenu />}
       {phase === "dialogue" && <DialogueModal />}
       {phase === "journal" && <JournalPanel />}
@@ -218,13 +223,9 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
       {phase === "ruins" && !photoMode && <RuinModal />}
       {phase === "complete" && <CompleteScreen />}
 
-      {!embed && !photoMode && (
-        <div className="terminal-scan absolute inset-0 z-50 opacity-30" />
-      )}
+      {!embed && !photoMode && <div className="terminal-scan absolute inset-0 z-50 opacity-30" />}
 
-      {inserting && (
-        <InsertionTransition ready={Boolean(GameCanvas)} onDone={endInsertion} />
-      )}
+      {inserting && <InsertionTransition ready={Boolean(GameCanvas)} onDone={endInsertion} />}
     </div>
   );
 }

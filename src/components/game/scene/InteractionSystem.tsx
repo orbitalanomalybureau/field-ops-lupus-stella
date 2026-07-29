@@ -1,6 +1,6 @@
 import { useFrame } from "@react-three/fiber";
 import { useRef } from "react";
-import { NPCS, SCAN_TARGETS, WORLD } from "@/game/data";
+import { CACHE_LOGS, NPCS, SCAN_TARGETS, SITE_LOGS, WORLD } from "@/game/data";
 import { ENTITIES, entitiesOfKind, type WorldEntity } from "@/game/entities";
 import { consumeEdge } from "@/game/input";
 import { passesCeiling } from "@/game/selectors";
@@ -16,6 +16,13 @@ const SCAN_REVEALS: Record<string, ObjectiveId> = {
 /** Registry rows this system picks. Resolved once; the pick runs every frame. */
 const BY_ID = new Map(ENTITIES.map((e) => [e.id, e] as const));
 const CACHES = entitiesOfKind("cache");
+
+/**
+ * One-shot discovery sites. Each fires once, tracked by a persisted seen-flag
+ * set through the same effect verb dialogue uses — no new store surface, and
+ * the flag rides the save blob so a read site stays read across reloads.
+ */
+const SITES = ["carver-marker", "verne-plate", "hale-camp"] as const;
 
 function dist2(ax: number, az: number, bx: number, bz: number) {
   return Math.hypot(ax - bx, az - bz);
@@ -127,6 +134,13 @@ export function InteractionSystem() {
       if (store.cachesLooted.includes(c.id)) continue;
       considerEntity(c, () => {
         store.lootCache(c.id);
+        // The cache is also a page: Survey Team B's serialized log rides in
+        // with the supplies. Recovered, not written — the entry is unauthored.
+        const log = CACHE_LOGS[c.id as keyof typeof CACHE_LOGS];
+        if (log) {
+          store.addJournal(log.title, log.body, false);
+          store.pushMessage(`RECOVERED — ${log.title}`);
+        }
         getAudio().pulseInteract();
       });
     }
@@ -152,6 +166,20 @@ export function InteractionSystem() {
     if (!store.codex.find((c) => c.id === "collars")?.unlocked) {
       considerEntity(BY_ID.get("gen-west"), () => store.unlockCodex("collars"), {
         sub: "Press E or scan",
+      });
+    }
+
+    // Discovery sites are not taskings — no pip points here. The prompt on the
+    // registry row is the only invitation, and it withdraws once read.
+    for (const id of SITES) {
+      if (store.flags[`seen-${id}`]) continue;
+      considerEntity(BY_ID.get(id), () => {
+        const log = SITE_LOGS[id];
+        store.applyDialogueEffect(`flag:seen-${id}`);
+        store.addJournal(log.title, log.body, false);
+        store.pushMessage(`SITE LOG — ${log.title}`);
+        if (log.codex) store.unlockCodex(log.codex);
+        getAudio().pulseInteract();
       });
     }
 
@@ -196,6 +224,10 @@ export function InteractionSystem() {
           const revealed = SCAN_REVEALS[nearest.id];
           if (revealed) store.revealObjective(revealed);
           store.pushMessage(`SCAN COMPLETE — ${nearest.title}`);
+          // The store decides what a scan yields — spores off the night ferns,
+          // a component off the collar, a shard off the herd. Ticker order:
+          // the specimen line lands above the completed-scan line.
+          store.harvestScan(nearest.id);
           getAudio().pulseInteract();
           scanHold.current = 0;
           nearScanId.current = null;

@@ -36,11 +36,15 @@ export function JournalPanel() {
   const file = () => {
     const text = body.trim();
     if (!text) return;
-    addJournal(title.trim() || "Field note", text);
+    // Third arg marks the entry operative-authored: only these count toward
+    // the survey's three-entry log requirement — the store enforces it.
+    addJournal(title.trim() || "Field note", text, true);
     setTitle("");
     setBody("");
     pushMessage("JOURNAL — note filed");
   };
+
+  const authoredCount = journal.filter((j) => j.authored).length;
 
   // Keystrokes reach the global input listener, which would queue panel and
   // photo actions to fire the moment the journal closes. Tab and Escape are
@@ -84,11 +88,20 @@ export function JournalPanel() {
           journal.map((j) => (
             <article
               key={j.id}
-              className="rounded-md border border-border bg-surface/40 p-3"
+              className={`rounded-md border p-3 ${
+                j.authored
+                  ? "border-accent/40 bg-accent/5"
+                  : "border-border bg-surface/40"
+              }`}
             >
               <p className="font-mono text-[10px] text-dim">
                 {new Date(j.t).toLocaleString()} · {j.x.toFixed(0)},
                 {j.z.toFixed(0)}
+                {j.authored ? (
+                  <span className="text-accent"> · OPERATIVE AUTHORED</span>
+                ) : (
+                  " · SYSTEM"
+                )}
               </p>
               <h3 className="mt-1 text-sm font-semibold text-fg">{j.title}</h3>
               <p className="mt-1 text-xs leading-relaxed text-muted">
@@ -102,6 +115,7 @@ export function JournalPanel() {
       <div className="mt-4 rounded-md border border-border bg-surface/40 p-3">
         <p className="font-mono text-[10px] tracking-widest text-muted">
           NEW ENTRY · STAMPED AT CURRENT POSITION
+          {authoredCount < 3 ? ` · FILED ${authoredCount}/3` : ""}
         </p>
         <input
           type="text"

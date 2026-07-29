@@ -3,6 +3,7 @@ import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { WORLD } from "@/game/data";
+import { ENTITIES } from "@/game/entities";
 import { QUALITY } from "@/game/quality";
 import { useGameStore } from "@/game/store";
 import { sampleBiome, sampleHeight } from "@/game/worldHeight";
@@ -81,6 +82,70 @@ function buildScree(scale: number): Rock[] {
     });
   }
   return out;
+}
+
+const HALE = ENTITIES.find((e) => e.id === "hale-camp");
+
+/**
+ * Hale's cold camp, below the beacon overlook. A collapsed frame tent, a dead
+ * lamp, one equipment case — somebody left in order, and nobody came back.
+ *
+ * Every piece takes its own height sample: the flank runs slope ~0.37 here and
+ * a single group height would float half the camp. The scree stream is
+ * untouched — the layout was verified against seed 7717's scatter, and the
+ * boulder just east of the canvas reads as the windbreak it was pitched behind.
+ */
+function HaleCamp() {
+  if (!HALE) return null;
+  const { x, z } = HALE;
+  return (
+    <group>
+      {/* Collapsed canvas over the snapped frame — the only shadow caster. */}
+      <mesh
+        castShadow
+        position={[x - 0.8, sampleHeight(x - 0.8, z - 0.5) + 0.3, z - 0.5]}
+        rotation={[0.28, 0.45, -0.3]}
+      >
+        <boxGeometry args={[2.3, 0.09, 1.7]} />
+        <meshStandardMaterial color="#5c5850" roughness={0.95} metalness={0.05} />
+      </mesh>
+      {/* Ridge pole, snapped and thrown clear */}
+      <mesh
+        position={[x + 0.3, sampleHeight(x + 0.3, z + 0.8) + 0.12, z + 0.8]}
+        rotation={[0.1, 0.5, 1.48]}
+      >
+        <cylinderGeometry args={[0.035, 0.045, 2.1, 6]} />
+        <meshStandardMaterial color="#4a4640" roughness={0.8} metalness={0.25} />
+      </mesh>
+      {/* The stub still planted, holding one corner of the canvas off the rock */}
+      <mesh
+        position={[x - 1.5, sampleHeight(x - 1.5, z + 0.3) + 0.4, z + 0.3]}
+        rotation={[0.3, 0, -0.2]}
+      >
+        <cylinderGeometry args={[0.04, 0.05, 1, 6]} />
+        <meshStandardMaterial color="#4a4640" roughness={0.8} metalness={0.25} />
+      </mesh>
+      {/* Dead lamp, toppled. No emissive — it burned out years before you came. */}
+      <group position={[x, sampleHeight(x, z + 1.6), z + 1.6]}>
+        <mesh position={[0, 0.1, 0]} rotation={[0, -0.4, 1.52]}>
+          <cylinderGeometry args={[0.04, 0.05, 1.3, 6]} />
+          <meshStandardMaterial color="#3a4048" metalness={0.5} roughness={0.6} />
+        </mesh>
+        <mesh position={[0.65, 0.16, -0.25]} rotation={[0.3, 0.4, 0]}>
+          <boxGeometry args={[0.34, 0.24, 0.34]} />
+          <meshStandardMaterial color="#33383f" metalness={0.4} roughness={0.7} />
+        </mesh>
+      </group>
+      {/* Equipment case, still latched, set against the rocks */}
+      <mesh
+        position={[x + 0.3, sampleHeight(x + 0.3, z - 1.4) + 0.22, z - 1.4]}
+        rotation={[-0.08, 0.9, 0.06]}
+      >
+        <boxGeometry args={[0.9, 0.5, 0.55]} />
+        <meshStandardMaterial color="#7a4a34" metalness={0.35} roughness={0.75} />
+      </mesh>
+    </group>
+  );
 }
 
 /** Survey-B route markers. Positions are load-bearing — do not move. */
@@ -227,6 +292,7 @@ export function Ridge7() {
       </instancedMesh>
 
       <RidgeCache />
+      <HaleCamp />
     </group>
   );
 }

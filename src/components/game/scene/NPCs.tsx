@@ -317,9 +317,12 @@ function NpcFigure({
     uiAcc.current += d;
     if (uiAcc.current >= UI_PERIOD) {
       uiAcc.current = 0;
-      const plate = shown.current.plate
-        ? playerDist < PLATE_HIDE
-        : playerDist < PLATE_SHOW;
+      // Nameplates are HUD, not world: they stay out of photographs.
+      const plate =
+        !s.photoMode &&
+        (shown.current.plate
+          ? playerDist < PLATE_HIDE
+          : playerDist < PLATE_SHOW);
       const bark =
         plate && playerDist < BARK_RADIUS && sim.barks
           ? pickBark(sim.barks, talked, s.weather, s.timeOfDay, index)

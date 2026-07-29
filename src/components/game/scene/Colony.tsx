@@ -10,6 +10,7 @@ import { sampleHeight } from "@/game/worldHeight";
 const SHADOW_TOWERS = new Set(["tower-south-west", "tower-south-east"]);
 
 const CARVER = ENTITIES.find((e) => e.id === "carver-marker");
+const VERNE = ENTITIES.find((e) => e.id === "verne-plate");
 
 function Dome({ x, z }: { x: number; z: number }) {
   const y = sampleHeight(x, z);
@@ -167,6 +168,30 @@ export function Colony() {
           <mesh position={[0, 1.65, 0.08]}>
             <planeGeometry args={[1, 0.4]} />
             <meshBasicMaterial color="#9a9080" side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      )}
+
+      {/* Verne hull plate — Berger's salvage, leaned facing his work spot.
+          Dead metal: no emissive, and only the slab itself casts a shadow. */}
+      {VERNE && (
+        <group
+          position={[VERNE.x, sampleHeight(VERNE.x, VERNE.z), VERNE.z]}
+          rotation={[0, 2.2, 0]}
+        >
+          <mesh castShadow position={[0, 0.8, 0]} rotation={[-0.3, 0, 0.03]}>
+            <boxGeometry args={[2.6, 1.7, 0.16]} />
+            <meshStandardMaterial color="#5a6570" metalness={0.6} roughness={0.7} />
+            {/* Scorch band in plate-local space, proud of the face — no z-fight */}
+            <mesh position={[0.15, -0.35, 0.11]}>
+              <boxGeometry args={[2.1, 0.55, 0.04]} />
+              <meshStandardMaterial color="#2e333a" metalness={0.5} roughness={0.85} />
+            </mesh>
+          </mesh>
+          {/* Prop strut holding the lean */}
+          <mesh position={[0, 0.6, -0.7]} rotation={[0.7, 0, 0]}>
+            <cylinderGeometry args={[0.05, 0.07, 1.7, 6]} />
+            <meshStandardMaterial color="#4a525c" metalness={0.6} roughness={0.5} />
           </mesh>
         </group>
       )}

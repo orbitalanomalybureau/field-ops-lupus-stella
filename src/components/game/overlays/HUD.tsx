@@ -7,7 +7,13 @@ import {
   visibleObjectivesOf,
 } from "@/game/selectors";
 import { getKeymap, isHeld, lastDevice, type Device } from "@/game/input";
-import type { ObjectiveId, WeatherKind, WorldMarker } from "@/game/types";
+import type {
+  CodexEntry,
+  ItemId,
+  ObjectiveId,
+  WeatherKind,
+  WorldMarker,
+} from "@/game/types";
 import {
   Crosshair,
   Map as MapIcon,
@@ -44,6 +50,86 @@ const WARN_HEALTH = 50;
 const CRITICAL_HEALTH = 25;
 /** PlayerController refuses to sprint at or below this stamina. */
 const SPRINT_FLOOR = 2;
+
+/** Where every codex chapter link points; one env var overrides for staging. */
+const NOVEL_SITE_URL =
+  (import.meta.env.VITE_NOVEL_SITE_URL as string | undefined) ??
+  "https://exodus2121.com";
+
+/**
+ * Last codex stage the operative has actually looked at, per entry id. Local
+ * marker, not save data: "you have not read this yet" belongs to the device,
+ * and losing it costs one spurious UPDATED tag, nothing more.
+ */
+const CODEX_READ_KEY = "fieldops-codex-read-v1";
+
+function readCodexMarker(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(CODEX_READ_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "number") out[k] = v;
+    }
+    return out;
+  } catch {
+    // Private mode or a mangled blob: every advanced entry tags UPDATED once.
+    return {};
+  }
+}
+
+function writeCodexMarker(marker: Record<string, number>): void {
+  try {
+    window.localStorage.setItem(CODEX_READ_KEY, JSON.stringify(marker));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+/**
+ * Resolve what a codex entry currently says. Stage n (1-based) reads
+ * stages[n-1]; entries without stages, or not yet advanced past the base
+ * unlock, fall back to the flat body.
+ */
+function codexBodyOf(
+  entry: CodexEntry,
+  stage: number,
+): { body: string; source?: string; stage: number; total: number } {
+  const stages = entry.stages;
+  if (!stages || stages.length === 0)
+    return { body: entry.body, stage: 0, total: 0 };
+  const idx = Math.min(Math.max(stage, 1), stages.length) - 1;
+  const current = stages[idx];
+  return {
+    body: current?.body ?? entry.body,
+    source: current?.source,
+    stage: idx + 1,
+    total: stages.length,
+  };
+}
+
+/**
+ * Samples the field team actually carries. Shapes reuse the map glyph set so
+ * the row stays legible without colour, same as the tactical map.
+ */
+const ITEM_ORDER: ItemId[] = [
+  "fang-quill",
+  "fern-spore",
+  "prism-shard",
+  "collar-component",
+];
+
+const ITEM_META: Record<
+  ItemId,
+  { label: string; shape: Exclude<MarkerShape, "waypoint">; tone: string }
+> = {
+  "fang-quill": { label: "quill", shape: "triangle", tone: "text-warn" },
+  "fern-spore": { label: "spore", shape: "circle", tone: "text-fern" },
+  "prism-shard": { label: "shard", shape: "diamond", tone: "text-accent" },
+  "collar-component": { label: "collar", shape: "ring", tone: "text-primary" },
+};
 
 /**
  * Map window, derived from the one constant the walk box is derived from: it is
@@ -277,7 +363,12 @@ export function HUD() {
   const animState = useGameStore((s) => s.animState);
   const openJournal = useGameStore((s) => s.openJournal);
   const togglePause = useGameStore((s) => s.togglePause);
+  const inventory = useGameStore((s) => s.inventory);
+  const codexStage = useGameStore((s) => s.codexStage);
   const [panel, setPanel] = useState<"none" | "obj" | "codex" | "map">("obj");
+  // Hydrated from localStorage after mount; {} until then, so SSR markup never
+  // depends on device state.
+  const [codexSeen, setCodexSeen] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<string | null>(null);
   const [waypoint, setWaypoint] = useState<Vec2 | null>(null);
   const [device, setDevice] = useState<Device>("keyboard");
@@ -327,6 +418,23 @@ export function HUD() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    setCodexSeen(readCodexMarker());
+  }, []);
+
+  // Opening the codex marks everything currently readable as read — on disk
+  // immediately, in memory only when the panel closes, so the UPDATED tags
+  // survive the whole read and are gone on the next open.
+  useEffect(() => {
+    if (panel !== "codex") return;
+    const snapshot: Record<string, number> = {};
+    for (const c of codexRaw) {
+      if (c.unlocked) snapshot[c.id] = codexStage[c.id] ?? 0;
+    }
+    writeCodexMarker(snapshot);
+    return () => setCodexSeen(snapshot);
+  }, [panel, codexRaw, codexStage]);
+
   // Sampled rather than read during render: input.ts is a mutable module, not a
   // subscribable store, and the prompt only has to keep up with a thumb.
   useEffect(() => {
@@ -360,6 +468,12 @@ export function HUD() {
   const doneCount = objectives.filter((o) => o.done).length;
   const bearingLabel = cardinalOf(compass);
   const vitals = vitalsTone(health);
+  const carried = ITEM_ORDER.filter((id) => (inventory[id] ?? 0) > 0);
+  // "New since last open" covers first unlocks too: an unread entry has no
+  // marker, and stage 0 > -1.
+  const codexIsNew = (c: CodexEntry) =>
+    c.unlocked && (codexStage[c.id] ?? 0) > (codexSeen[c.id] ?? -1);
+  const codexHasNews = panel !== "codex" && codex.some(codexIsNew);
 
   const ranged = markers
     .map((m) => ({ marker: m, dist: distanceTo(playerPos, m) }))
@@ -462,6 +576,7 @@ export function HUD() {
             onClick={() => setPanel(panel === "codex" ? "none" : "codex")}
             label="Codex"
             icon={<BookOpen className="h-4 w-4" />}
+            dot={codexHasNews}
           />
           <HudBtn
             active={panel === "map"}
@@ -576,6 +691,27 @@ export function HUD() {
               {playerPos.x.toFixed(0)},{playerPos.z.toFixed(0)}
             </span>
           </div>
+          {/* Wraps rather than truncates: at 375px four carried types become
+              two terse lines, never a clipped count. */}
+          {carried.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted">
+              <span className="tracking-widest">SPECIMENS</span>
+              {carried.map((id) => (
+                <span
+                  key={id}
+                  className={`flex items-center gap-1 ${ITEM_META[id].tone}`}
+                >
+                  <MarkerGlyph shape={ITEM_META[id].shape} />
+                  <span className="text-muted">
+                    {ITEM_META[id].label}{" "}
+                    <span className="tabular-nums text-fg">
+                      {inventory[id]}
+                    </span>
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -632,20 +768,47 @@ export function HUD() {
             FIELD CODEX
           </p>
           <ul className="space-y-3">
-            {codex.map((c) => (
-              <li key={c.id}>
-                <p
-                  className={`text-xs font-semibold ${c.unlocked ? "text-fg" : "text-muted"}`}
-                >
-                  {c.unlocked ? c.title : "········"}
-                </p>
-                {c.unlocked && (
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                    {c.body}
+            {codex.map((c) => {
+              const staged = codexBodyOf(c, codexStage[c.id] ?? 0);
+              return (
+                <li key={c.id}>
+                  <p
+                    className={`text-xs font-semibold ${c.unlocked ? "text-fg" : "text-muted"}`}
+                  >
+                    {c.unlocked ? c.title : "········"}
+                    {codexIsNew(c) && (
+                      <span className="ml-1.5 align-middle rounded-sm border border-accent/40 px-1 py-px font-mono text-[9px] tracking-widest text-accent">
+                        UPDATED
+                      </span>
+                    )}
                   </p>
-                )}
-              </li>
-            ))}
+                  {c.unlocked && (
+                    <>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                        {staged.body}
+                      </p>
+                      {staged.total > 0 && (
+                        <p className="mt-0.5 font-mono text-[10px] text-dim">
+                          STAGE {staged.stage}/{staged.total}
+                          {staged.source ? ` · ${staged.source}` : ""}
+                        </p>
+                      )}
+                      {c.chapterRef && (
+                        <a
+                          href={`${NOVEL_SITE_URL}?utm_source=fieldops&utm_medium=codex&utm_campaign=ch${c.chapterRef.chapter}`}
+                          target="_blank"
+                          rel="noopener"
+                          className="mt-1 inline-block break-words font-mono text-[11px] leading-snug text-accent underline decoration-accent/40 underline-offset-2 hover:text-primary-glow"
+                        >
+                          Continue in 2121: EXODUS — Ch. {c.chapterRef.chapter}:{" "}
+                          {c.chapterRef.teaser}
+                        </a>
+                      )}
+                    </>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -982,24 +1145,33 @@ function HudBtn({
   onClick,
   label,
   icon,
+  dot = false,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
   icon: React.ReactNode;
+  /** Subtle unread pip — codex advanced since the operative last looked. */
+  dot?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={label}
+      aria-label={dot ? `${label} — updated` : label}
       aria-pressed={active}
-      className={`flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-md border px-1.5 font-mono text-[11px] tracking-wide transition sm:flex-row sm:gap-1.5 sm:px-2.5 ${
+      className={`relative flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-md border px-1.5 font-mono text-[11px] tracking-wide transition sm:flex-row sm:gap-1.5 sm:px-2.5 ${
         active
           ? "border-accent bg-accent/15 text-accent"
           : "border-border bg-surface/80 text-muted hover:border-muted hover:text-fg"
       }`}
     >
+      {dot && (
+        <span
+          aria-hidden="true"
+          className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent"
+        />
+      )}
       {icon}
       {/* Labelled at every size — two of the five icons used to be identical,
           leaving mobile with a row of indistinguishable glyphs. */}

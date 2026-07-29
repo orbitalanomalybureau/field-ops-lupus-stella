@@ -1,24 +1,57 @@
 import { useEffect, useState } from "react";
 import { useGameStore } from "@/game/store";
 
+/** Where the doorway out of the game points; one env var overrides for staging. */
+const NOVEL_SITE_URL =
+  (import.meta.env.VITE_NOVEL_SITE_URL as string | undefined) ??
+  "https://exodus2121.com";
+
 export function CompleteScreen() {
   const character = useGameStore((s) => s.getCharacter());
   const discoveries = useGameStore((s) => s.discoveries);
   const ending = useGameStore((s) => s.ending);
   const reset = useGameStore((s) => s.reset);
   const setPhase = useGameStore((s) => s.setPhase);
+  const exportJournal = useGameStore((s) => s.exportJournal);
   const total = useGameStore((s) => s.visibleObjectives().length);
   const done = useGameStore(
     (s) => s.visibleObjectives().filter((o) => o.done).length,
   );
   const [armed, setArmed] = useState(false);
   const broadcast = ending === "broadcast";
+  // This screen only mounts after gameplay, so navigator exists; the guard is
+  // for the share API itself (desktop browsers mostly lack it).
+  const canShare =
+    typeof navigator !== "undefined" && typeof navigator.share === "function";
 
   useEffect(() => {
     if (!armed) return;
     const t = window.setTimeout(() => setArmed(false), 5000);
     return () => window.clearTimeout(t);
   }, [armed]);
+
+  const downloadLog = () => {
+    const blob = new Blob([exportJournal()], {
+      type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `field-ops-journal-${character?.callsign ?? "ops"}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const shareLog = async () => {
+    try {
+      await navigator.share({
+        title: "Field Ops — expedition log",
+        text: exportJournal(),
+      });
+    } catch {
+      // Share sheet dismissed or payload refused; the download path remains.
+    }
+  };
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-void px-4">
@@ -70,7 +103,40 @@ export function CompleteScreen() {
             </p>
           </>
         )}
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+
+        <div className="mt-6 rounded-md border border-border bg-surface/40 p-3 text-left">
+          <p className="font-mono text-[10px] tracking-widest text-muted">
+            EXPEDITION LOG · CLEARED FOR RELEASE
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={downloadLog}
+              className="min-h-11 rounded-md border border-border px-4 text-sm text-muted hover:border-muted hover:text-fg"
+            >
+              Download log
+            </button>
+            {canShare && (
+              <button
+                type="button"
+                onClick={() => void shareLog()}
+                className="min-h-11 rounded-md border border-border px-4 text-sm text-muted hover:border-muted hover:text-fg"
+              >
+                Share log
+              </button>
+            )}
+          </div>
+          <a
+            href={`${NOVEL_SITE_URL}?utm_source=fieldops&utm_medium=complete&utm_campaign=complete`}
+            target="_blank"
+            rel="noopener"
+            className="mt-3 inline-block break-words font-mono text-[11px] leading-snug text-accent underline decoration-accent/40 underline-offset-2 hover:text-primary-glow"
+          >
+            The full record — 2121: EXODUS
+          </a>
+        </div>
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
           <button
             type="button"
             onClick={() => setPhase("playing")}

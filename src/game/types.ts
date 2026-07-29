@@ -18,6 +18,22 @@ export type SpoilerCeiling = "book1" | "book2early";
 /** How the survey was closed out. Null until the log is sealed. */
 export type Ending = "silent" | "broadcast";
 
+/**
+ * Field-harvest currencies. Counts live in `store.inventory`; colony staff
+ * redeem them for permanent upgrades via dialogue effects.
+ */
+export type ItemId =
+  | "fern-spore"
+  | "fang-quill"
+  | "prism-shard"
+  | "collar-component";
+
+/**
+ * The four permanent field-mod tracks. Bonuses are additive, start at 0, and
+ * are folded into `getCharacter()` so every existing consumer sees them.
+ */
+export type UpgradeKey = "scan" | "stamina" | "combat" | "stealth";
+
 export type ObjectiveId =
   | "perimeter"
   | "ferns"
@@ -56,6 +72,14 @@ export type CodexEntry = {
   body: string;
   unlocked: boolean;
   book2?: boolean;
+  /**
+   * Deeper strata of the same entry. Stage 0 is `body`; stage n (n >= 1)
+   * renders stages[n-1]. Progress lives in `store.codexStage`.
+   */
+  stages?: { body: string; source?: string }[];
+  /** Where this thread continues in the novel. Feeds the journal's FURTHER
+   * READING section and the fieldops:discovery bridge message. */
+  chapterRef?: { chapter: number; teaser: string };
 };
 
 export type CharacterDef = {
@@ -114,10 +138,25 @@ export type WeatherKind = "clear" | "haze" | "rain" | "storm";
 
 export type AnimState = "idle" | "walk" | "run" | "scan" | "combat";
 
+/**
+ * One selectable reply. `if` gates visibility — "flagName", "!flagName", or
+ * "item:<ItemId>>=<n>". `once` names a flag raised on first use that hides the
+ * choice thereafter; `setFlag` is raised whenever the choice is taken. A
+ * gated choice is unreachable even by index — see store.chooseDialogue.
+ */
+export type DialogueChoice = {
+  label: string;
+  next?: string;
+  effect?: string;
+  if?: string;
+  setFlag?: string;
+  once?: string;
+};
+
 export type DialogueLine = {
   speaker: string;
   text: string;
-  choices?: { label: string; next?: string; effect?: string }[];
+  choices?: DialogueChoice[];
 };
 
 export type DialogueTree = {
@@ -126,6 +165,21 @@ export type DialogueTree = {
   start: string;
   nodes: Record<string, DialogueLine>;
 };
+
+/**
+ * World moments the comms layer speaks to. Theo hears Ava; the other
+ * operatives hear the terse colony net. Lines live in data.ts AVA_LINES.
+ */
+export type AvaTrigger =
+  | "treeline"
+  | "tracked"
+  | "storm-in"
+  | "ruin-near"
+  | "nightfall"
+  | "first-kill"
+  | "ambush-seen"
+  | "coast"
+  | "broadcast";
 
 export type NpcDef = {
   id: string;
@@ -146,6 +200,9 @@ export type JournalEntry = {
   body: string;
   x: number;
   z: number;
+  /** True when the operative wrote it by hand; system log lines omit it.
+   * The journal3 objective counts only authored entries. */
+  authored?: boolean;
 };
 
 export type SpawnPoint =

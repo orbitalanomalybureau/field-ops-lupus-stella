@@ -16,9 +16,7 @@ const MAX_SAMPLE_MS = 200;
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
-  return sorted.length % 2 === 1
-    ? sorted[mid]
-    : (sorted[mid - 1] + sorted[mid]) / 2;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /**
@@ -81,25 +79,54 @@ function QualityRig() {
   useEffect(() => {
     const settings = QUALITY[quality];
 
-    if (
-      camera instanceof THREE.PerspectiveCamera &&
-      camera.far !== settings.farPlane
-    ) {
+    if (camera instanceof THREE.PerspectiveCamera && camera.far !== settings.farPlane) {
       camera.far = settings.farPlane;
       camera.updateProjectionMatrix();
     }
 
     // R3F's own configure() has already applied the `shadows` prop by now, so
     // the flip has to be tracked here rather than read off the renderer.
-    const flipped =
-      lastShadows.current !== null &&
-      lastShadows.current !== settings.shadowsEnabled;
+    const flipped = lastShadows.current !== null && lastShadows.current !== settings.shadowsEnabled;
     lastShadows.current = settings.shadowsEnabled;
     if (flipped) invalidateMaterials(scene);
 
     const resized = applyShadowMapSize(scene, settings.shadowMapSize);
     if (flipped || resized) gl.shadowMap.needsUpdate = true;
   }, [quality, camera, scene, gl]);
+
+  return null;
+}
+
+/**
+ * Paired with overlays/PhotoMode.tsx, which dispatches this event. The name is
+ * duplicated there as a string literal rather than imported from here so the
+ * overlay bundle never pulls in this module's three.js graph.
+ */
+const PHOTO_FOV_EVENT = "fieldops:photo-fov";
+
+/**
+ * Photo mode's FOV control. A window event rather than store state keeps the
+ * camera write out of React entirely: the slider fires at input rate and
+ * nothing else needs to observe it. `fov: null` restores the gameplay FOV,
+ * which is captured from the camera on first use rather than hardcoded.
+ */
+function PhotoFovRig() {
+  const camera = useThree((s) => s.camera);
+
+  useEffect(() => {
+    let baseFov: number | null = null;
+    const onFov = (e: Event) => {
+      if (!(camera instanceof THREE.PerspectiveCamera)) return;
+      const detail = (e as CustomEvent<{ fov: number | null }>).detail;
+      if (baseFov === null) baseFov = camera.fov;
+      const next = Math.min(120, Math.max(20, detail?.fov ?? baseFov));
+      if (camera.fov === next) return;
+      camera.fov = next;
+      camera.updateProjectionMatrix();
+    };
+    window.addEventListener(PHOTO_FOV_EVENT, onFov);
+    return () => window.removeEventListener(PHOTO_FOV_EVENT, onFov);
+  }, [camera]);
 
   return null;
 }
@@ -153,6 +180,10 @@ export function GameCanvas() {
         powerPreference: "high-performance",
         alpha: false,
         stencil: false,
+        // Photo mode reads the canvas back with toBlob on demand. Keeping the
+        // buffer costs a copy some drivers would otherwise elide (~0–1 ms a
+        // frame) — accepted so capture needs no render-loop hook.
+        preserveDrawingBuffer: true,
       }}
       camera={{
         fov: 56,
@@ -178,6 +209,7 @@ export function GameCanvas() {
       <Suspense fallback={null}>
         <GameScene />
         <QualityRig />
+        <PhotoFovRig />
         <FrameBudgetGovernor />
         <AdaptiveDpr pixelated />
         <AdaptiveEvents />

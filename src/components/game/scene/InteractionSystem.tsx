@@ -1,6 +1,9 @@
 import { useFrame } from "@react-three/fiber";
 import { useRef } from "react";
 import { NPCS, SCAN_TARGETS, WORLD } from "@/game/data";
+import { ENTITIES, entitiesOfKind, type WorldEntity } from "@/game/entities";
+import { consumeEdge } from "@/game/input";
+import { passesCeiling } from "@/game/selectors";
 import { useGameStore } from "@/game/store";
 import { getAudio } from "@/game/audio";
 import type { ObjectiveId } from "@/game/types";
@@ -10,6 +13,10 @@ const SCAN_REVEALS: Record<string, ObjectiveId> = {
   "scan-grid": "ruins",
 };
 
+/** Registry rows this system picks. Resolved once; the pick runs every frame. */
+const BY_ID = new Map(ENTITIES.map((e) => [e.id, e] as const));
+const CACHES = entitiesOfKind("cache");
+
 function dist2(ax: number, az: number, bx: number, bz: number) {
   return Math.hypot(ax - bx, az - bz);
 }
@@ -18,6 +25,7 @@ type Cand = {
   label: string;
   sub?: string;
   dist: number;
+  radius: number;
   action: () => void;
 };
 
@@ -38,7 +46,10 @@ export function InteractionSystem() {
     const char = store.getCharacter();
     const scanMul = char?.scanBonus ?? 1;
 
-    if (!perimeterDone.current && dist2(x, z, 0, 42) < 12) {
+    if (
+      !perimeterDone.current &&
+      dist2(x, z, WORLD.southGate[0], WORLD.southGate[2]) < 12
+    ) {
       perimeterDone.current = true;
       store.completeObjective("perimeter");
     }
@@ -57,113 +68,105 @@ export function InteractionSystem() {
 
     let best: Cand | null = null;
     const consider = (c: Cand) => {
-      if (c.dist > 7) return;
+      if (c.dist > c.radius) return;
       if (!best || c.dist < best.dist) best = c;
     };
 
-    for (const n of NPCS) {
-      if (n.book2 && ceil === "book1") continue;
+    /** Label, pick range, and spoiler tier all come off the registry row. */
+    const considerEntity = (
+      e: WorldEntity | undefined,
+      action: () => void,
+      opts?: { label?: string; sub?: string },
+    ) => {
+      if (!e?.interact || !passesCeiling(e, ceil)) return;
       consider({
+        label: opts?.label ?? e.interact.label,
+        sub: opts?.sub ?? "Press E",
+        dist: dist2(x, z, e.x, e.z),
+        radius: e.interact.radius,
+        action,
+      });
+    };
+
+    for (const n of NPCS) {
+      considerEntity(BY_ID.get(n.id), () => store.openDialogue(n.id), {
         label: `Talk — ${n.name}`,
         sub: n.role,
-        dist: dist2(x, z, n.x, n.z),
-        action: () => store.openDialogue(n.id),
       });
     }
 
-    // Dome enter/exit
+    // Entering is picked from the apron; leaving, from the ops floor under the
+    // shell. The two prompts are deliberately anchored two metres apart.
     if (store.insideDome) {
-      consider({
+      considerEntity(BY_ID.get("dome-command"), () => store.exitDome(), {
         label: "Exit command dome",
-        sub: "Press E",
-        dist: dist2(x, z, 0, 6),
-        action: () => store.exitDome(),
       });
     } else {
-      consider({
-        label: "Enter command dome",
+      considerEntity(BY_ID.get("dome-entry"), () => store.enterDome(), {
         sub: "Ops floor",
-        dist: dist2(x, z, 0, 8),
-        action: () => store.enterDome(),
       });
     }
 
+    const ruin = BY_ID.get("ruin");
     const ruinD = dist2(x, z, WORLD.ruinPos[0], WORLD.ruinPos[2]);
     if (!store.ruinOpened) {
       // openRuin() refuses the sealed chamber; the prompt must say so first.
       const sealed = !store.isObjectiveAvailable("ruins");
-      const atDoor = ruinD < 7;
-      consider({
-        label: sealed ? "Inspect chamber seal" : "Enter chamber",
-        sub: sealed ? "Alloy inert — seal holds" : atDoor ? "Press E" : "Approach",
-        dist: ruinD,
-        action: () => store.openRuin(),
+      const atDoor = ruinD < (ruin?.interact?.radius ?? 0);
+      considerEntity(ruin, () => store.openRuin(), {
+        label: sealed ? "Inspect chamber seal" : undefined,
+        sub: sealed
+          ? "Alloy inert — seal holds"
+          : atDoor
+            ? "Press E"
+            : "Approach",
       });
     }
 
-    const caches: [string, number, number, boolean?][] = [
-      ["cache-a", -22, 88],
-      ["cache-b", 28, 118],
-      ["cache-r", -95, 40],
-      ["cache-c", 35, 195, true],
-    ];
-    for (const [id, px, pz, book2] of caches) {
-      if (book2 && ceil === "book1") continue;
-      if (store.cachesLooted.includes(id)) continue;
-      consider({
-        label: "Recover cache",
-        sub: "Press E",
-        dist: dist2(x, z, px, pz),
-        action: () => {
-          store.lootCache(id);
-          getAudio().pulseInteract();
-        },
+    for (const c of CACHES) {
+      if (store.cachesLooted.includes(c.id)) continue;
+      considerEntity(c, () => {
+        store.lootCache(c.id);
+        getAudio().pulseInteract();
       });
     }
 
     if (!store.ridgeBeaconPlanted) {
-      consider({
-        label: "Plant Ridge-7 beacon",
-        sub: "Press E",
-        dist: dist2(x, z, WORLD.ridgeOverlook[0], WORLD.ridgeOverlook[2]),
-        action: () => {
-          store.plantRidgeBeacon();
-          getAudio().pulseInteract();
-        },
+      considerEntity(BY_ID.get("ridge-beacon"), () => {
+        store.plantRidgeBeacon();
+        getAudio().pulseInteract();
       });
     }
 
-    if (ceil !== "book1" && !store.kaguyahimeLogged) {
-      consider({
-        label: "Log Kaguyahime memorial",
-        sub: "Far-continent vector",
-        dist: dist2(x, z, WORLD.coastMemorial[0], WORLD.coastMemorial[2]),
-        action: () => {
+    if (!store.kaguyahimeLogged) {
+      considerEntity(
+        BY_ID.get("coast-memorial"),
+        () => {
           store.logKaguyahime();
           getAudio().pulseInteract();
         },
-      });
+        { sub: "Far-continent vector" },
+      );
     }
 
     if (!store.codex.find((c) => c.id === "collars")?.unlocked) {
-      consider({
-        label: "Inspect collar",
+      considerEntity(BY_ID.get("gen-west"), () => store.unlockCodex("collars"), {
         sub: "Press E or scan",
-        dist: dist2(x, z, -22, 12),
-        action: () => store.unlockCodex("collars"),
       });
     }
 
     if (best) {
       const b: Cand = best;
       store.setInteract({ label: b.label, sub: b.sub, dist: b.dist });
-      pendingAction.current = b.dist < 7 ? b.action : null;
+      pendingAction.current = b.dist < b.radius ? b.action : null;
     } else {
       store.setInteract(null);
       pendingAction.current = null;
     }
 
-    if (checkKeyE() || checkTouchInteract()) {
+    // The interact edge is consumed here and nowhere else — whichever caller
+    // reads it first clears it, and the controller's snapshot() would too.
+    if (consumeEdge("interact")) {
       pendingAction.current?.();
     }
 
@@ -171,7 +174,7 @@ export function InteractionSystem() {
       let nearest: (typeof SCAN_TARGETS)[0] | null = null;
       let nd = 999;
       for (const t of SCAN_TARGETS) {
-        if (t.book2 && ceil === "book1") continue;
+        if (!passesCeiling(t, ceil)) continue;
         if (store.scannedIds.includes(t.id)) continue;
         const dd = dist2(x, z, t.x, t.z);
         if (dd < t.radius && dd < nd) {
@@ -220,31 +223,4 @@ export function InteractionSystem() {
   });
 
   return null;
-}
-
-function checkKeyE() {
-  const w = window as unknown as { __keyE?: boolean };
-  if (w.__keyE) {
-    w.__keyE = false;
-    return true;
-  }
-  return false;
-}
-
-function checkTouchInteract() {
-  const t = (window as unknown as { __touchInput?: { interact: boolean } })
-    .__touchInput;
-  if (t?.interact) {
-    t.interact = false;
-    return true;
-  }
-  return false;
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("keydown", (e) => {
-    if (e.code === "KeyE") {
-      (window as unknown as { __keyE: boolean }).__keyE = true;
-    }
-  });
 }

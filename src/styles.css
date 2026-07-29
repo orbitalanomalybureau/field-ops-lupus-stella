@@ -83,3 +83,21 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/**
+ * The in-game reducedMotion flag, applied by FieldOpsApp to the root element.
+ * The media query above only reaches players who set the preference OS-wide;
+ * a player who ticks the box in Settings was still getting every CSS animation
+ * and the scanline wash on top of a scene that had already gone quiet.
+ */
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+.reduced-motion .terminal-scan {
+  display: none;
+}

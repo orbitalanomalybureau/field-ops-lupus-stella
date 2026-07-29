@@ -2,10 +2,23 @@ import { useEffect, useState } from "react";
 import { getAudio } from "@/game/audio";
 import { useGameStore } from "@/game/store";
 
+/**
+ * Pointer lock, and nothing else.
+ *
+ * Every other control belongs to Tutorial, which starts issuing hints the
+ * moment lock is acquired — the same moment this disappears. Putting anything
+ * more than the lock affordance here would put two cards teaching movement on
+ * screen at once.
+ */
 export function ClickToPlay() {
-  const [show, setShow] = useState(true);
+  const [show, setShow] = useState(false);
 
   useEffect(() => {
+    // Touch has no pointer lock to acquire; MobileControls owns that surface.
+    if (matchMedia("(pointer: coarse)").matches) return;
+    if (navigator.maxTouchPoints > 0) return;
+
+    setShow(!document.pointerLockElement);
     const onLockChange = () => {
       if (document.pointerLockElement) {
         setShow(false);
@@ -17,13 +30,8 @@ export function ClickToPlay() {
       if (useGameStore.getState().phase === "playing") setShow(true);
     };
     document.addEventListener("pointerlockchange", onLockChange);
-    const t = window.setTimeout(() => {
-      if (matchMedia("(pointer: coarse)").matches) setShow(false);
-    }, 5000);
-    return () => {
+    return () =>
       document.removeEventListener("pointerlockchange", onLockChange);
-      window.clearTimeout(t);
-    };
   }, []);
 
   if (!show) return null;
@@ -31,7 +39,7 @@ export function ClickToPlay() {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-[32%] z-20 flex justify-center px-4">
       <p className="panel-glass rounded-md px-4 py-2.5 font-mono text-xs text-muted">
-        Click canvas to look · WASD move · Q scan · E interact
+        Click canvas to look
       </p>
     </div>
   );

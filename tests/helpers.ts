@@ -6,6 +6,7 @@ export type ControlsProbe = {
   getSpeed: () => number;
   getFps: () => number;
   setKeys: (codes: string[]) => void;
+  teleport: (x: number, z: number, yaw?: number) => void;
 };
 
 declare global {
@@ -78,6 +79,24 @@ export async function walk(
   for (const k of keys) await page.keyboard.down(k);
   await page.waitForTimeout(ms);
   for (const k of keys) await page.keyboard.up(k);
+}
+
+/**
+ * Put the operative somewhere. Walking is not viable in this harness: headless
+ * WebGL runs at a couple of frames a second and the controller clamps delta,
+ * so a metre of ground costs seconds of wall clock.
+ */
+export async function teleport(
+  page: Page,
+  x: number,
+  z: number,
+  yaw?: number,
+): Promise<void> {
+  await page.evaluate(
+    ([px, pz, py]) => window.__controlsTest?.teleport(px!, pz!, py ?? undefined),
+    [x, z, yaw ?? null],
+  );
+  await page.waitForTimeout(1200);
 }
 
 export async function probe<T>(

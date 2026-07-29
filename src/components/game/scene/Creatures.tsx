@@ -172,8 +172,7 @@ export function Creatures() {
     const path = store.pathSamples;
     const stealth = store.getCharacter()?.stealth ?? 1;
     const combat = store.combatEnabled;
-    const combatMul =
-      (window as unknown as { __combatMul?: number }).__combatMul ?? 1;
+    const combatMul = store.getCharacter()?.combatBonus ?? 1;
     const weather = store.weather;
     let anyTrack = false;
 

@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useGameStore } from "@/game/store";
-import { MARKERS } from "@/game/data";
-import { passesCeiling, visibleObjectivesOf } from "@/game/selectors";
-import type { WeatherKind } from "@/game/types";
+import { MARKERS, WORLD } from "@/game/data";
+import {
+  isObjectiveActionable,
+  passesCeiling,
+  visibleObjectivesOf,
+} from "@/game/selectors";
+import { getKeymap, isHeld, lastDevice, type Device } from "@/game/input";
+import type { ObjectiveId, WeatherKind, WorldMarker } from "@/game/types";
 import {
   Crosshair,
   Map as MapIcon,
@@ -14,6 +19,134 @@ import {
   Scan,
   CloudRain,
 } from "lucide-react";
+
+type Vec2 = { x: number; z: number };
+
+/** Arc of the world the bearing tape shows, centred on the heading. */
+const TAPE_SPAN_DEG = 120;
+const TAPE_HALF_DEG = TAPE_SPAN_DEG / 2;
+const TICK_STEP_DEG = 15;
+/** More pips than this and the tape is unreadable at phone width. */
+const MAX_MARKER_PIPS = 4;
+
+const CARDINALS: Record<number, string> = {
+  0: "N",
+  45: "NE",
+  90: "E",
+  135: "SE",
+  180: "S",
+  225: "SW",
+  270: "W",
+  315: "NW",
+};
+
+const WARN_HEALTH = 50;
+const CRITICAL_HEALTH = 25;
+/** PlayerController refuses to sprint at or below this stamina. */
+const SPRINT_FLOOR = 2;
+
+/**
+ * Map window, derived from the one constant the walk box is derived from: it is
+ * a superset of PlayerController's clamp, which is WORLD.bounds in x and a band
+ * running from just north of the plateau down past the coast in z (the world is
+ * authored southward from the colony). Hardcoded projection numbers here used
+ * to let the schematic drift away from the world it claims to describe.
+ */
+const MAP_MIN_X = -WORLD.bounds;
+const MAP_MAX_X = WORLD.bounds;
+const MAP_MIN_Z = -WORLD.bounds * 0.2;
+const MAP_MAX_Z = WORLD.bounds * 1.2;
+/** Percent inset so a pip on the boundary is not clipped in half. */
+const MAP_PAD_PCT = 7;
+const MAP_SPAN_PCT = 100 - MAP_PAD_PCT * 2;
+/** Click tolerance for "you tapped the waypoint you already placed". */
+const WAYPOINT_HIT_PCT = 7;
+
+type MarkerShape =
+  | "square"
+  | "diamond"
+  | "triangle"
+  | "chevron"
+  | "circle"
+  | "ring"
+  | "mast"
+  | "pill"
+  | "cross"
+  | "waypoint";
+
+/**
+ * Shape carries the same information as colour, so the map still reads for a
+ * colour-blind operative.
+ */
+const SHAPES: Record<
+  Exclude<MarkerShape, "waypoint">,
+  { cls: string; clip?: string }
+> = {
+  square: { cls: "h-2 w-2 bg-current" },
+  diamond: { cls: "h-2 w-2 rotate-45 bg-current" },
+  triangle: {
+    cls: "h-2 w-2.5 bg-current",
+    clip: "polygon(50% 0%, 100% 100%, 0% 100%)",
+  },
+  chevron: {
+    cls: "h-2 w-2.5 bg-current",
+    clip: "polygon(0% 0%, 100% 0%, 50% 100%)",
+  },
+  circle: { cls: "h-2 w-2 rounded-full bg-current" },
+  ring: { cls: "h-2.5 w-2.5 rounded-full border border-current" },
+  mast: { cls: "h-2.5 w-1 bg-current" },
+  pill: { cls: "h-1 w-3 rounded-full bg-current" },
+  cross: {
+    cls: "h-2.5 w-2.5 bg-current",
+    clip: "polygon(40% 0,60% 0,60% 40%,100% 40%,100% 60%,60% 60%,60% 100%,40% 100%,40% 60%,0 60%,0 40%,40% 40%)",
+  },
+};
+
+const MARKER_STYLE: Record<
+  WorldMarker["kind"],
+  { shape: MarkerShape; tone: string; legend: string }
+> = {
+  colony: { shape: "square", tone: "text-accent", legend: "COLONY" },
+  ruin: { shape: "diamond", tone: "text-warn", legend: "RUIN" },
+  ridge: { shape: "triangle", tone: "text-primary", legend: "RIDGE" },
+  cache: { shape: "circle", tone: "text-fg", legend: "CACHE" },
+  coast: { shape: "pill", tone: "text-danger", legend: "COAST" },
+  objective: { shape: "ring", tone: "text-accent", legend: "TASKING" },
+  poi: { shape: "mast", tone: "text-muted", legend: "SENSOR" },
+  npc: { shape: "chevron", tone: "text-fern", legend: "CREW" },
+  danger: { shape: "cross", tone: "text-danger", legend: "HOSTILE" },
+};
+
+/**
+ * Which world marker each objective points at. Objectives carry no coordinates
+ * of their own and the tracked pip needs one; the multi-site taskings list
+ * every candidate so the nearest wins.
+ */
+const OBJECTIVE_SITES: Partial<Record<ObjectiveId, string[]>> = {
+  perimeter: ["south-gate"],
+  npcs: ["npc-t", "npc-c"],
+  dome: ["colony"],
+  scan: ["sensor", "treeline"],
+  ferns: ["treeline"],
+  ridge7: ["ridge7"],
+  caches: ["cache-a", "cache-b", "cache-r", "cache-c"],
+  prismhoof: ["herd"],
+  shadowfang: ["treeline"],
+  kaguyahime: ["coast"],
+  ruins: ["ruin"],
+  remember: ["ruin"],
+};
+
+type TapePip = {
+  id: string;
+  label: string;
+  dist: number;
+  /** Degrees off the current heading, -180..180. */
+  rel: number;
+  tone: string;
+  shape: MarkerShape;
+  tracked?: boolean;
+};
 
 function timeLabel(tod: number) {
   const hours = Math.floor(tod * 28) % 28;
@@ -36,7 +169,88 @@ function weatherClass(weather: WeatherKind) {
     ? "text-warn"
     : weather === "rain"
       ? "text-accent"
-      : "text-dim";
+      : "text-muted";
+}
+
+/** North is -Z, east is +X — the convention PlayerController's yaw uses. */
+function bearingTo(from: Vec2, to: Vec2): number {
+  return (Math.atan2(to.x - from.x, from.z - to.z) * 180) / Math.PI;
+}
+
+function relativeBearing(bearing: number, heading: number): number {
+  return ((((bearing - heading) % 360) + 540) % 360) - 180;
+}
+
+function distanceTo(from: Vec2, to: Vec2): number {
+  return Math.hypot(to.x - from.x, to.z - from.z);
+}
+
+function formatDist(m: number): string {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${Math.round(m)}m`;
+}
+
+function normalizeDeg(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
+/** Three-digit bearing, terminal style: 007°, 184°. */
+function degLabel(deg: number): string {
+  return String(Math.round(normalizeDeg(deg)) % 360).padStart(3, "0");
+}
+
+function cardinalOf(bearing: number): string {
+  const norm = normalizeDeg(bearing);
+  return norm < 45 || norm >= 315
+    ? "N"
+    : norm < 135
+      ? "E"
+      : norm < 225
+        ? "S"
+        : "W";
+}
+
+function projectX(x: number): number {
+  return (
+    MAP_PAD_PCT + ((x - MAP_MIN_X) / (MAP_MAX_X - MAP_MIN_X)) * MAP_SPAN_PCT
+  );
+}
+
+function projectZ(z: number): number {
+  return (
+    MAP_PAD_PCT + ((z - MAP_MIN_Z) / (MAP_MAX_Z - MAP_MIN_Z)) * MAP_SPAN_PCT
+  );
+}
+
+function unprojectX(pct: number): number {
+  return (
+    MAP_MIN_X + ((pct - MAP_PAD_PCT) / MAP_SPAN_PCT) * (MAP_MAX_X - MAP_MIN_X)
+  );
+}
+
+function unprojectZ(pct: number): number {
+  return (
+    MAP_MIN_Z + ((pct - MAP_PAD_PCT) / MAP_SPAN_PCT) * (MAP_MAX_Z - MAP_MIN_Z)
+  );
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+/** "KeyE" → "E". The prompt follows a rebind instead of lying about it. */
+function keyLabel(code: string): string {
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code === "Space") return "SPC";
+  return code.toUpperCase();
+}
+
+function vitalsTone(health: number) {
+  if (health > WARN_HEALTH)
+    return { bar: "bg-accent", label: "text-muted", pulse: false };
+  if (health > CRITICAL_HEALTH)
+    return { bar: "bg-warn", label: "text-warn", pulse: false };
+  return { bar: "bg-danger", label: "text-danger", pulse: true };
 }
 
 export function HUD() {
@@ -65,6 +279,10 @@ export function HUD() {
   const togglePause = useGameStore((s) => s.togglePause);
   const [panel, setPanel] = useState<"none" | "obj" | "codex" | "map">("obj");
   const [toast, setToast] = useState<string | null>(null);
+  const [waypoint, setWaypoint] = useState<Vec2 | null>(null);
+  const [device, setDevice] = useState<Device>("keyboard");
+  const [staminaSpent, setStaminaSpent] = useState(false);
+  const staminaPrev = useRef(stamina);
 
   const objectives = useMemo(
     () => visibleObjectivesOf(objectivesRaw, revealed, spoiler),
@@ -83,6 +301,18 @@ export function HUD() {
     return Array.from(new Map(merged.map((m) => [m.id, m])).values());
   }, [dynamicMarkers, spoiler]);
 
+  // First actionable tasking that has somewhere to go; the tape tracks that one.
+  const trackedObjective = useMemo(
+    () =>
+      objectivesRaw.find(
+        (o) =>
+          !o.done &&
+          OBJECTIVE_SITES[o.id] &&
+          isObjectiveActionable(o, objectivesRaw, revealed, spoiler),
+      ) ?? null,
+    [objectivesRaw, revealed, spoiler],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "KeyM") setPanel((p) => (p === "map" ? "none" : "map"));
@@ -97,6 +327,26 @@ export function HUD() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Sampled rather than read during render: input.ts is a mutable module, not a
+  // subscribable store, and the prompt only has to keep up with a thumb.
+  useEffect(() => {
+    const id = window.setInterval(() => setDevice(lastDevice()), 400);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Sprint denial has no store flag: only sprinting drains stamina, so a fall
+  // through the floor — or holding sprint while already there — is the denial.
+  useEffect(() => {
+    const prev = staminaPrev.current;
+    staminaPrev.current = stamina;
+    const denied =
+      stamina <= SPRINT_FLOOR && (prev > SPRINT_FLOOR || isHeld("sprint"));
+    if (!denied) return;
+    setStaminaSpent(true);
+    const t = window.setTimeout(() => setStaminaSpent(false), 900);
+    return () => window.clearTimeout(t);
+  }, [stamina]);
+
   // Phones get one auto-expiring line instead of the stacked feed; without it
   // pushMessage output is invisible on the primary form factor.
   useEffect(() => {
@@ -108,22 +358,78 @@ export function HUD() {
   }, [messages]);
 
   const doneCount = objectives.filter((o) => o.done).length;
-  const bearingLabel =
-    compass < 45 || compass >= 315
-      ? "N"
-      : compass < 135
-        ? "E"
-        : compass < 225
-          ? "S"
-          : "W";
+  const bearingLabel = cardinalOf(compass);
+  const vitals = vitalsTone(health);
+
+  const ranged = markers
+    .map((m) => ({ marker: m, dist: distanceTo(playerPos, m) }))
+    .sort((a, b) => a.dist - b.dist);
+  const trackedSites = trackedObjective
+    ? (OBJECTIVE_SITES[trackedObjective.id] ?? [])
+    : [];
+  const trackedSite =
+    ranged.find(({ marker }) => trackedSites.includes(marker.id)) ?? null;
+
+  const pips: TapePip[] = [];
+  if (waypoint) {
+    pips.push({
+      id: "waypoint",
+      label: "WAYPOINT",
+      dist: distanceTo(playerPos, waypoint),
+      rel: relativeBearing(bearingTo(playerPos, waypoint), compass),
+      tone: "text-fern",
+      shape: "waypoint",
+    });
+  }
+  if (trackedSite && trackedObjective) {
+    pips.push({
+      id: `tracked-${trackedSite.marker.id}`,
+      label: trackedObjective.title,
+      dist: trackedSite.dist,
+      rel: relativeBearing(bearingTo(playerPos, trackedSite.marker), compass),
+      tone: "text-accent",
+      shape: MARKER_STYLE[trackedSite.marker.kind].shape,
+      tracked: true,
+    });
+  }
+  let pipped = 0;
+  for (const { marker, dist } of ranged) {
+    if (pipped >= MAX_MARKER_PIPS) break;
+    if (marker.id === trackedSite?.marker.id) continue;
+    const rel = relativeBearing(bearingTo(playerPos, marker), compass);
+    if (Math.abs(rel) > TAPE_HALF_DEG) continue;
+    const style = MARKER_STYLE[marker.kind];
+    pips.push({
+      id: marker.id,
+      label: marker.label,
+      dist,
+      rel,
+      tone: style.tone,
+      shape: style.shape,
+    });
+    pipped += 1;
+  }
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
+      {health < CRITICAL_HEALTH && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 animate-pulse"
+          style={{
+            background: `radial-gradient(ellipse at center, transparent 38%, rgb(184 58 58 / ${(
+              0.16 +
+              (1 - health / CRITICAL_HEALTH) * 0.34
+            ).toFixed(2)}) 100%)`,
+          }}
+        />
+      )}
+
       <div className="pointer-events-auto absolute left-0 right-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-4">
         <div className="panel-glass min-w-0 max-w-[8.5rem] rounded-md px-3 py-2 sm:max-w-[18rem]">
           <div className="flex items-center gap-2">
             <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
-            <p className="truncate font-mono text-[10px] tracking-[0.25em] text-accent">
+            <p className="truncate font-mono text-[11px] tracking-[0.25em] text-accent">
               {character?.callsign ?? "—"}
               <span className="hidden sm:inline"> · FIELD OPS</span>
             </p>
@@ -133,26 +439,13 @@ export function HUD() {
           <p className="mt-0.5 hidden truncate text-xs text-muted sm:block">
             {character?.rank} {character?.name}
           </p>
-          <p className="mt-1 truncate font-mono text-[10px] text-dim">
+          <p className="mt-1 truncate font-mono text-[11px] text-muted">
             {timeLabel(timeOfDay)}
             <span className="hidden sm:inline">
               {" "}
               · {animState.toUpperCase()}
             </span>
           </p>
-        </div>
-
-        <div className="panel-glass hidden rounded-md px-4 py-2 sm:block">
-          <p className="text-center font-mono text-lg font-semibold tabular-nums text-fg">
-            {bearingLabel}
-            <span className="ml-2 text-xs text-dim">{Math.round(compass)}°</span>
-          </p>
-          <div className="mt-1 flex items-center justify-center gap-1 font-mono text-[10px] text-muted">
-            <CloudRain className="h-3 w-3" />
-            <span className={weatherClass(weather)}>
-              WX {weather.toUpperCase()}
-            </span>
-          </div>
         </div>
 
         {/* Never wraps: five 44px targets wrapping under the identity panel on a
@@ -191,12 +484,25 @@ export function HUD() {
         </div>
       </div>
 
+      {/* Below the top row at every width: centred inside it the tape gets
+          crushed between the identity panel and five buttons on a 640px
+          viewport, and hiding it on phones is exactly what made the old text
+          compass useless on the form factor most players arrive on. */}
+      <div className="absolute left-3 right-3 top-[4.5rem] sm:left-1/2 sm:right-auto sm:top-[5.5rem] sm:w-[26rem] sm:max-w-[calc(100%-2rem)] sm:-translate-x-1/2">
+        <CompassTape
+          compass={compass}
+          bearingLabel={bearingLabel}
+          pips={pips}
+          weather={weather}
+        />
+      </div>
+
       {scannerActive && (
         <div className="pointer-events-none absolute inset-0 border-2 border-accent/30">
           <div className="absolute inset-8 border border-accent/20" />
           <div className="absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full border border-accent/40" />
           <div className="absolute bottom-36 left-1/2 w-48 -translate-x-1/2">
-            <p className="mb-1 flex items-center justify-center gap-1 font-mono text-[10px] text-accent">
+            <p className="mb-1 flex items-center justify-center gap-1 font-mono text-[11px] text-accent">
               <Scan className="h-3 w-3" /> SCAN · {scannedIds.length}
             </p>
             <div className="h-1 overflow-hidden rounded-full bg-surface">
@@ -212,13 +518,13 @@ export function HUD() {
       {interact && interact.dist < 8 && (
         <div className="pointer-events-none absolute bottom-[38%] left-1/2 -translate-x-1/2">
           <div className="panel-glass flex items-center gap-3 rounded-md px-4 py-2.5">
-            <span className="flex h-8 w-8 items-center justify-center rounded-sm border border-accent/50 font-mono text-xs text-accent">
-              E
-            </span>
+            <InteractGlyph device={device} />
             <div>
               <p className="text-sm font-medium text-fg">{interact.label}</p>
               {interact.sub && (
-                <p className="font-mono text-[10px] text-dim">{interact.sub}</p>
+                <p className="font-mono text-[11px] text-muted">
+                  {interact.sub}
+                </p>
               )}
             </div>
           </div>
@@ -227,39 +533,65 @@ export function HUD() {
 
       <div className="pointer-events-none absolute bottom-24 left-3 right-3 sm:bottom-5 sm:left-4 sm:right-auto sm:w-72">
         {toast && (
-          <p className="panel-glass mb-1.5 truncate rounded-md px-2.5 py-1.5 font-mono text-[10px] leading-snug text-muted sm:hidden">
+          <p
+            role="status"
+            aria-live="polite"
+            className="panel-glass mb-1.5 truncate rounded-md px-2.5 py-1.5 font-mono text-[11px] leading-snug text-muted sm:hidden"
+          >
             {toast}
           </p>
         )}
         <div className="panel-glass space-y-2 rounded-md p-3">
-          <Bar icon={<Activity className="h-3 w-3" />} label="VITALS" value={health} color="bg-accent" />
-          <Bar icon={<span className="font-mono text-[9px]">STM</span>} label="STAMINA" value={stamina} color="bg-primary" />
-          <Bar icon={<Radio className="h-3 w-3" />} label="ZPE SIG" value={signalMeter * 100} color="bg-warn" />
-          <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[10px]">
-            <span className={combatEnabled ? "text-danger" : "text-dim"}>
+          <Bar
+            icon={<Activity className="h-3 w-3" />}
+            label="VITALS"
+            value={health}
+            color={vitals.bar}
+            labelClass={vitals.label}
+            pulse={vitals.pulse}
+          />
+          <Bar
+            icon={<span className="font-mono text-[11px]">STM</span>}
+            label="STAMINA"
+            value={stamina}
+            color={staminaSpent ? "bg-warn" : "bg-primary"}
+            labelClass={staminaSpent ? "text-warn" : "text-muted"}
+            pulse={staminaSpent}
+            note={staminaSpent ? "SPENT" : undefined}
+          />
+          <Bar
+            icon={<Radio className="h-3 w-3" />}
+            label="ZPE SIG"
+            value={signalMeter * 100}
+            color="bg-warn"
+          />
+          <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[11px]">
+            <span className={combatEnabled ? "text-danger" : "text-muted"}>
               {combatEnabled ? "ARMED" : "SAFE"}
             </span>
             {trackedByFang && (
               <span className="animate-pulse text-warn">TRACKED</span>
             )}
-            <span className="tabular-nums text-fg sm:hidden">
-              {bearingLabel} {Math.round(compass)}°
-            </span>
-            <span className={`sm:hidden ${weatherClass(weather)}`}>
-              WX {weather.toUpperCase()}
-            </span>
-            <span className="text-dim">
+            <span className="text-muted">
               {playerPos.x.toFixed(0)},{playerPos.z.toFixed(0)}
             </span>
           </div>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-5 right-4 hidden w-80 space-y-1 sm:block">
+      {/* Live region, but only the newest line is exposed: the feed re-keys on
+          every push, so leaving the whole stack readable re-announces five
+          lines for one event. */}
+      <div
+        role="log"
+        aria-live="polite"
+        className="pointer-events-none absolute bottom-5 right-4 hidden w-80 space-y-1 sm:block"
+      >
         {messages.slice(0, 5).map((m, i) => (
           <p
             key={`${m}-${i}`}
-            className="panel-glass rounded-md px-2.5 py-1.5 font-mono text-[10px] leading-snug text-muted"
+            aria-hidden={i > 0}
+            className="panel-glass rounded-md px-2.5 py-1.5 font-mono text-[11px] leading-snug text-muted"
             style={{ opacity: 1 - i * 0.15 }}
           >
             {m}
@@ -268,8 +600,8 @@ export function HUD() {
       </div>
 
       {panel === "obj" && (
-        <div className="pointer-events-auto absolute left-3 top-24 max-h-[48vh] sm:top-20 w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
-          <p className="mb-2 font-mono text-[10px] tracking-widest text-accent">
+        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[42vh] sm:max-h-[48vh] sm:top-[11rem] w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+          <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
             OBJECTIVES {doneCount}/{objectives.length}
           </p>
           <ul className="space-y-2.5">
@@ -287,9 +619,7 @@ export function HUD() {
                   {o.optional ? " · opt" : ""}
                   {o.book2 ? " · B2" : ""}
                 </span>
-                {!o.done && (
-                  <p className="mt-0.5 pl-4 text-dim">{o.detail}</p>
-                )}
+                {!o.done && <p className="mt-0.5 pl-4 text-muted">{o.detail}</p>}
               </li>
             ))}
           </ul>
@@ -297,15 +627,15 @@ export function HUD() {
       )}
 
       {panel === "codex" && (
-        <div className="pointer-events-auto absolute left-3 top-24 max-h-[55vh] sm:top-20 w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
-          <p className="mb-2 font-mono text-[10px] tracking-widest text-accent">
+        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[46vh] sm:max-h-[55vh] sm:top-[11rem] w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+          <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
             FIELD CODEX
           </p>
           <ul className="space-y-3">
             {codex.map((c) => (
               <li key={c.id}>
                 <p
-                  className={`text-xs font-semibold ${c.unlocked ? "text-fg" : "text-dim"}`}
+                  className={`text-xs font-semibold ${c.unlocked ? "text-fg" : "text-muted"}`}
                 >
                   {c.unlocked ? c.title : "········"}
                 </p>
@@ -320,53 +650,292 @@ export function HUD() {
         </div>
       )}
 
+      {/* The map panel is narrower than the others on a phone: the square grid
+          plus its legend has to clear the thumbstick and the action column. */}
       {panel === "map" && (
-        <div className="pointer-events-auto absolute left-1/2 top-24 w-[min(100%-1.5rem,19rem)] sm:top-20 -translate-x-1/2 panel-glass rounded-md p-3 sm:left-auto sm:right-4 sm:translate-x-0">
-          <p className="mb-2 font-mono text-[10px] tracking-widest text-accent">
+        <div className="pointer-events-auto absolute left-1/2 top-[10rem] w-[min(100%-1.5rem,15rem)] sm:top-[11rem] sm:w-[19rem] -translate-x-1/2 panel-glass rounded-md p-3 sm:left-auto sm:right-4 sm:translate-x-0">
+          <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
             TACTICAL MAP
           </p>
-          <div className="relative aspect-square w-full overflow-hidden rounded-sm border border-border bg-void">
-            <div className="absolute inset-0 bg-gradient-to-b from-surface/40 to-void" />
-            {markers.map((m) => {
-              const px = 50 + (m.x / 260) * 42;
-              const pz = 8 + (m.z / 230) * 82;
-              return (
-                <div
-                  key={m.id}
-                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                  style={{ left: `${px}%`, top: `${pz}%` }}
-                  title={m.label}
-                >
-                  <div
-                    className={`h-2 w-2 rounded-full ${
-                      m.kind === "ruin"
-                        ? "bg-warn"
-                        : m.kind === "colony"
-                          ? "bg-accent"
-                          : m.kind === "ridge"
-                            ? "bg-primary"
-                            : m.kind === "coast"
-                              ? "bg-danger"
-                              : "bg-muted"
-                    }`}
-                  />
-                </div>
-              );
-            })}
-            <div
-              className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-fg bg-primary-glow"
-              style={{
-                left: `${50 + (playerPos.x / 260) * 42}%`,
-                top: `${8 + (playerPos.z / 230) * 82}%`,
-              }}
-            />
-          </div>
-          <p className="mt-2 font-mono text-[10px] text-dim">
-            W Ridge · S forest/coast · J journal
-          </p>
+          <TacticalMap
+            markers={markers}
+            playerPos={playerPos}
+            compass={compass}
+            waypoint={waypoint}
+            onSet={setWaypoint}
+          />
         </div>
       )}
     </div>
+  );
+}
+
+function CompassTape({
+  compass,
+  bearingLabel,
+  pips,
+  weather,
+}: {
+  compass: number;
+  bearingLabel: string;
+  pips: TapePip[];
+  weather: WeatherKind;
+}) {
+  const ticks: { deg: number; rel: number; label?: string }[] = [];
+  const first =
+    Math.ceil((compass - TAPE_HALF_DEG) / TICK_STEP_DEG) * TICK_STEP_DEG;
+  for (let d = first; d <= compass + TAPE_HALF_DEG; d += TICK_STEP_DEG) {
+    const norm = ((d % 360) + 360) % 360;
+    ticks.push({ deg: norm, rel: d - compass, label: CARDINALS[norm] });
+  }
+
+  const tracked = pips.find((p) => p.tracked);
+  const heading = `Heading ${bearingLabel}, ${Math.round(normalizeDeg(compass))} degrees`;
+  const label = tracked
+    ? `${heading}. Tracking ${tracked.label}, ${formatDist(tracked.dist)}.`
+    : `${heading}.`;
+
+  return (
+    <div
+      role="img"
+      aria-label={label}
+      className="panel-glass rounded-md px-2 py-1.5"
+    >
+      <div className="relative h-12 overflow-hidden">
+        <div className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-accent/40" />
+        {ticks.map((t) =>
+          t.label ? (
+            <div
+              key={t.deg}
+              className="absolute top-0 -translate-x-1/2"
+              style={{ left: `${50 + (t.rel / TAPE_SPAN_DEG) * 100}%` }}
+            >
+              <p className="text-center font-mono text-[11px] leading-none tracking-widest text-fg">
+                {t.label}
+              </p>
+              <span className="mx-auto mt-1 block h-2 w-px bg-muted" />
+            </div>
+          ) : (
+            <span
+              key={t.deg}
+              className="absolute top-[0.9rem] block h-1.5 w-px -translate-x-1/2 bg-dim"
+              style={{ left: `${50 + (t.rel / TAPE_SPAN_DEG) * 100}%` }}
+            />
+          ),
+        )}
+        {pips.map((p) => {
+          const off = Math.abs(p.rel) > TAPE_HALF_DEG;
+          const rel = clamp(p.rel, -TAPE_HALF_DEG, TAPE_HALF_DEG);
+          return (
+            <div
+              key={p.id}
+              className={`absolute bottom-0 flex -translate-x-1/2 flex-col items-center gap-0.5 ${p.tone} ${
+                p.tracked ? "border-b border-accent pb-px" : ""
+              }`}
+              style={{ left: `${50 + (rel / TAPE_SPAN_DEG) * 100}%` }}
+            >
+              <MarkerGlyph shape={p.shape} />
+              <span className="flex items-center gap-0.5 whitespace-nowrap font-mono text-[11px] leading-none">
+                {off && <span>{p.rel < 0 ? "‹" : "›"}</span>}
+                {p.tracked && (
+                  <span className="hidden max-w-[7rem] truncate uppercase sm:inline">
+                    {p.label}
+                  </span>
+                )}
+                <span className="tabular-nums">{formatDist(p.dist)}</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[11px] text-muted">
+        <span className="tabular-nums text-fg">
+          {bearingLabel} {degLabel(compass)}°
+        </span>
+        <span className={`flex items-center gap-1 ${weatherClass(weather)}`}>
+          <CloudRain className="h-3 w-3" /> WX {weather.toUpperCase()}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TacticalMap({
+  markers,
+  playerPos,
+  compass,
+  waypoint,
+  onSet,
+}: {
+  markers: WorldMarker[];
+  playerPos: { x: number; z: number };
+  compass: number;
+  waypoint: Vec2 | null;
+  onSet: (next: Vec2 | null) => void;
+}) {
+  const legendKinds = useMemo(() => {
+    const seen = new Set<WorldMarker["kind"]>();
+    for (const m of markers) seen.add(m.kind);
+    return [...seen];
+  }, [markers]);
+
+  const onPick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    // Keyboard activation carries no coordinates; dropping at the rect origin
+    // would plant a waypoint in a corner nobody aimed at.
+    if (e.detail === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * 100;
+    const pz = ((e.clientY - rect.top) / rect.height) * 100;
+    if (
+      waypoint &&
+      Math.hypot(projectX(waypoint.x) - px, projectZ(waypoint.z) - pz) <
+        WAYPOINT_HIT_PCT
+    ) {
+      onSet(null);
+      return;
+    }
+    onSet({
+      x: clamp(unprojectX(px), MAP_MIN_X, MAP_MAX_X),
+      z: clamp(unprojectZ(pz), MAP_MIN_Z, MAP_MAX_Z),
+    });
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onPick}
+        aria-label="Tactical map. Click the map to mark a waypoint, click the waypoint to clear it."
+        className="relative block aspect-square w-full overflow-hidden rounded-sm border border-border bg-void"
+      >
+        <span className="absolute inset-0 bg-gradient-to-b from-surface/40 to-void" />
+        {markers.map((m) => {
+          const style = MARKER_STYLE[m.kind];
+          return (
+            <span
+              key={m.id}
+              className={`absolute -translate-x-1/2 -translate-y-1/2 ${style.tone}`}
+              style={{ left: `${projectX(m.x)}%`, top: `${projectZ(m.z)}%` }}
+              title={m.label}
+            >
+              <MarkerGlyph shape={style.shape} />
+            </span>
+          );
+        })}
+        {waypoint && (
+          <span
+            className="absolute -translate-x-1/2 -translate-y-1/2 text-fern"
+            style={{
+              left: `${projectX(waypoint.x)}%`,
+              top: `${projectZ(waypoint.z)}%`,
+            }}
+            title="Waypoint"
+          >
+            <MarkerGlyph shape="waypoint" />
+          </span>
+        )}
+        <span
+          className="absolute -translate-x-1/2 -translate-y-1/2"
+          style={{
+            left: `${projectX(playerPos.x)}%`,
+            top: `${projectZ(playerPos.z)}%`,
+          }}
+        >
+          <HeadingArrow compass={compass} />
+        </span>
+      </button>
+
+      <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[11px] text-muted">
+        {waypoint ? (
+          <span className="truncate tabular-nums text-fern">
+            WPT {formatDist(distanceTo(playerPos, waypoint))} ·{" "}
+            {degLabel(bearingTo(playerPos, waypoint))}°
+          </span>
+        ) : (
+          <span className="truncate">MARK A WAYPOINT — TAP THE GRID</span>
+        )}
+        {waypoint && (
+          <button
+            type="button"
+            onClick={() => onSet(null)}
+            className="min-h-8 shrink-0 rounded-sm border border-border px-2 font-mono text-[11px] tracking-wide text-muted hover:border-muted hover:text-fg"
+          >
+            CLEAR
+          </button>
+        )}
+      </div>
+
+      <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted">
+        <li className="flex items-center gap-1">
+          <HeadingArrow compass={0} />
+          <span>YOU</span>
+        </li>
+        {legendKinds.map((kind) => (
+          <li key={kind} className={`flex items-center gap-1 ${MARKER_STYLE[kind].tone}`}>
+            <MarkerGlyph shape={MARKER_STYLE[kind].shape} />
+            <span className="text-muted">{MARKER_STYLE[kind].legend}</span>
+          </li>
+        ))}
+        {waypoint && (
+          <li className="flex items-center gap-1 text-fern">
+            <MarkerGlyph shape="waypoint" />
+            <span className="text-muted">WPT</span>
+          </li>
+        )}
+      </ul>
+    </>
+  );
+}
+
+function MarkerGlyph({
+  shape,
+  className = "",
+}: {
+  shape: MarkerShape;
+  className?: string;
+}) {
+  if (shape === "waypoint")
+    return (
+      <Crosshair aria-hidden="true" className={`h-3 w-3 shrink-0 ${className}`} />
+    );
+  const s = SHAPES[shape];
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block shrink-0 ${s.cls} ${className}`}
+      style={s.clip ? { clipPath: s.clip } : undefined}
+    />
+  );
+}
+
+/** Rotation is applied on an inner node so it cannot fight the centring translate. */
+function HeadingArrow({ compass }: { compass: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="block h-3.5 w-3.5"
+      style={{ transform: `rotate(${compass}deg)` }}
+    >
+      <span
+        className="block h-full w-full bg-primary-glow"
+        style={{ clipPath: "polygon(50% 0%, 90% 100%, 50% 74%, 10% 100%)" }}
+      />
+    </span>
+  );
+}
+
+function InteractGlyph({ device }: { device: Device }) {
+  const base =
+    "flex h-8 items-center justify-center border border-accent/50 font-mono text-[11px] tracking-wide text-accent";
+  if (device === "touch")
+    return <span className={`${base} w-12 rounded-full`}>TAP</span>;
+  // input.ts maps the standard-mapping X button to interact.
+  if (device === "gamepad")
+    return <span className={`${base} w-8 rounded-full`}>X</span>;
+  return (
+    <span className={`${base} w-8 rounded-sm`}>
+      {keyLabel(getKeymap().interact[0] ?? "KeyE")}
+    </span>
   );
 }
 
@@ -375,23 +944,32 @@ function Bar({
   label,
   value,
   color,
+  labelClass = "text-muted",
+  pulse = false,
+  note,
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
   color: string;
+  labelClass?: string;
+  pulse?: boolean;
+  note?: string;
 }) {
   return (
     <div>
-      <div className="mb-0.5 flex items-center justify-between font-mono text-[10px] text-muted">
+      <div
+        className={`mb-0.5 flex items-center justify-between font-mono text-[11px] ${labelClass}`}
+      >
         <span className="flex items-center gap-1">
           {icon} {label}
+          {note ? ` · ${note}` : ""}
         </span>
         <span className="tabular-nums">{Math.round(value)}%</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-surface">
         <div
-          className={`h-full ${color} transition-all duration-200`}
+          className={`h-full ${color} transition-all duration-200 ${pulse ? "animate-pulse" : ""}`}
           style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
         />
       </div>
@@ -416,7 +994,7 @@ function HudBtn({
       onClick={onClick}
       aria-label={label}
       aria-pressed={active}
-      className={`flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-md border px-1.5 font-mono text-[9px] tracking-wide transition sm:flex-row sm:gap-1.5 sm:px-2.5 sm:text-[10px] ${
+      className={`flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-md border px-1.5 font-mono text-[11px] tracking-wide transition sm:flex-row sm:gap-1.5 sm:px-2.5 ${
         active
           ? "border-accent bg-accent/15 text-accent"
           : "border-border bg-surface/80 text-muted hover:border-muted hover:text-fg"

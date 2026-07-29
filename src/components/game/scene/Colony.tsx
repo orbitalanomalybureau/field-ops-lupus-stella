@@ -1,11 +1,20 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { ENTITIES, entitiesOfKind } from "@/game/entities";
 import { sampleHeight } from "@/game/worldHeight";
 
-function Dome({ position }: { position: [number, number, number] }) {
-  const y = sampleHeight(position[0], position[2]);
+/**
+ * Only the southern pair rakes shadows across the dome cluster; three shadow
+ * maps for the same set piece is not worth the fill cost.
+ */
+const SHADOW_TOWERS = new Set(["tower-south-west", "tower-south-east"]);
+
+const CARVER = ENTITIES.find((e) => e.id === "carver-marker");
+
+function Dome({ x, z }: { x: number; z: number }) {
+  const y = sampleHeight(x, z);
   return (
-    <group position={[position[0], y, position[2]]}>
+    <group position={[x, y, z]}>
       {/* Interior warm glow is emissive, not a dynamic light */}
       <mesh castShadow receiveShadow position={[0, 2.3, 0]}>
         <sphereGeometry args={[4.3, 28, 18, 0, Math.PI * 2, 0, Math.PI / 2]} />
@@ -29,10 +38,10 @@ function Dome({ position }: { position: [number, number, number] }) {
   );
 }
 
-function Generator({ position }: { position: [number, number, number] }) {
-  const y = sampleHeight(position[0], position[2]);
+function Generator({ x, z }: { x: number; z: number }) {
+  const y = sampleHeight(x, z);
   return (
-    <group position={[position[0], y, position[2]]}>
+    <group position={[x, y, z]}>
       <mesh castShadow position={[0, 1.5, 0]}>
         <cylinderGeometry args={[1.15, 1.35, 3, 14]} />
         <meshStandardMaterial color="#2c333c" metalness={0.6} roughness={0.35} />
@@ -56,15 +65,17 @@ function Generator({ position }: { position: [number, number, number] }) {
 }
 
 function LightTower({
-  position,
+  x,
+  z,
   shadow = false,
 }: {
-  position: [number, number, number];
+  x: number;
+  z: number;
   shadow?: boolean;
 }) {
-  const y = sampleHeight(position[0], position[2]);
+  const y = sampleHeight(x, z);
   return (
-    <group position={[position[0], y, position[2]]}>
+    <group position={[x, y, z]}>
       <mesh castShadow position={[0, 4.2, 0]}>
         <cylinderGeometry args={[0.16, 0.24, 8.4, 8]} />
         <meshStandardMaterial color="#3a4048" metalness={0.55} roughness={0.45} />
@@ -119,24 +130,17 @@ export function Colony() {
 
   return (
     <group>
-      <Dome position={[0, 0, 6]} />
-      <Dome position={[-14, 0, 2]} />
-      <Dome position={[14, 0, 4]} />
-      <Dome position={[-8, 0, 18]} />
-      <Dome position={[10, 0, 16]} />
+      {entitiesOfKind("dome").map((e) => (
+        <Dome key={e.id} x={e.x} z={e.z} />
+      ))}
 
-      <Generator position={[-22, 0, 12]} />
-      <Generator position={[22, 0, 10]} />
-      <Generator position={[-12, 0, -8]} />
-      <Generator position={[16, 0, -6]} />
+      {entitiesOfKind("generator").map((e) => (
+        <Generator key={e.id} x={e.x} z={e.z} />
+      ))}
 
-      {/* Only the southern pair rakes shadows across the dome cluster; three
-          shadow maps for the same set piece is not worth the fill cost. */}
-      <LightTower position={[-35, 0, 35]} shadow />
-      <LightTower position={[35, 0, 35]} shadow />
-      <LightTower position={[0, 0, 42]} />
-      <LightTower position={[-28, 0, -5]} />
-      <LightTower position={[28, 0, -5]} />
+      {entitiesOfKind("tower").map((e) => (
+        <LightTower key={e.id} x={e.x} z={e.z} shadow={SHADOW_TOWERS.has(e.id)} />
+      ))}
 
       <mesh
         castShadow
@@ -154,16 +158,18 @@ export function Colony() {
       </mesh>
 
       {/* Carver marker */}
-      <group position={[6, sampleHeight(6, 38), 38]}>
-        <mesh castShadow position={[0, 0.75, 0]}>
-          <boxGeometry args={[0.38, 1.5, 0.12]} />
-          <meshStandardMaterial color="#5a5048" />
-        </mesh>
-        <mesh position={[0, 1.65, 0.08]}>
-          <planeGeometry args={[1, 0.4]} />
-          <meshBasicMaterial color="#9a9080" side={THREE.DoubleSide} />
-        </mesh>
-      </group>
+      {CARVER && (
+        <group position={[CARVER.x, sampleHeight(CARVER.x, CARVER.z), CARVER.z]}>
+          <mesh castShadow position={[0, 0.75, 0]}>
+            <boxGeometry args={[0.38, 1.5, 0.12]} />
+            <meshStandardMaterial color="#5a5048" />
+          </mesh>
+          <mesh position={[0, 1.65, 0.08]}>
+            <planeGeometry args={[1, 0.4]} />
+            <meshBasicMaterial color="#9a9080" side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      )}
 
       {/* South gate */}
       {[-3.8, 3.8].map((x) => (

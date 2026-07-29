@@ -1,3 +1,4 @@
+import { ENTITIES } from "./entities";
 import type {
   CharacterDef,
   CodexEntry,
@@ -9,6 +10,21 @@ import type {
   SpawnPoint,
   WorldMarker,
 } from "./types";
+
+/**
+ * entities.ts owns where things stand; this file owns what they are called and
+ * what they say. A site named in both places is looked up, never retyped.
+ */
+function site(id: string): { x: number; z: number } {
+  const entity = ENTITIES.find((e) => e.id === id);
+  if (!entity) throw new Error(`data: no world entity "${id}"`);
+  return { x: entity.x, z: entity.z };
+}
+
+function sitePos(id: string): readonly [number, number, number] {
+  const { x, z } = site(id);
+  return [x, 0, z] as const;
+}
 
 export const CHARACTERS: CharacterDef[] = [
   {
@@ -287,8 +303,7 @@ export const NPCS: NpcDef[] = [
     id: "thornhill",
     name: "Dr. Thornhill",
     role: "ZPE systems",
-    x: -18,
-    z: 14,
+    ...site("thornhill"),
     color: "#6a90a8",
     dialogueId: "dlg-thornhill",
     tip: "Ask about collars",
@@ -297,8 +312,7 @@ export const NPCS: NpcDef[] = [
     id: "castillo",
     name: "June Castillo",
     role: "Perimeter med",
-    x: 8,
-    z: 24,
+    ...site("castillo"),
     color: "#a87868",
     dialogueId: "dlg-castillo",
     tip: "Vitals & Carver",
@@ -307,8 +321,7 @@ export const NPCS: NpcDef[] = [
     id: "voss",
     name: "Adele Voss",
     role: "Contracts / Gate",
-    x: 16,
-    z: 10,
+    ...site("voss"),
     color: "#8a7a60",
     dialogueId: "dlg-voss",
     tip: "Ridge-7 clearance",
@@ -317,8 +330,7 @@ export const NPCS: NpcDef[] = [
     id: "berger",
     name: "Berger",
     role: "Ark engineer",
-    x: -6,
-    z: 32,
+    ...site("berger"),
     color: "#5a7068",
     dialogueId: "dlg-berger",
     tip: "Storm protocol",
@@ -327,8 +339,7 @@ export const NPCS: NpcDef[] = [
     id: "tomas",
     name: "Tomas",
     role: "Office of the Voice",
-    x: 4,
-    z: 18,
+    ...site("tomas"),
     color: "#7a6a90",
     dialogueId: "dlg-tomas",
     tip: "Quiet protocol",
@@ -540,16 +551,22 @@ export const MARKERS: WorldMarker[] = [
   { id: "south-gate", label: "South Gate", x: 0, z: 42, kind: "objective" },
   { id: "treeline", label: "Treeline", x: 0, z: 72, kind: "objective" },
   { id: "herd", label: "Herd field", x: -55, z: 95, kind: "objective" },
-  { id: "cache-a", label: "Cache Alpha", x: -22, z: 88, kind: "cache" },
-  { id: "cache-b", label: "Cache Bravo", x: 28, z: 118, kind: "cache" },
-  { id: "cache-r", label: "Ridge cache", x: -95, z: 40, kind: "cache" },
-  { id: "cache-c", label: "Coast cache", x: 35, z: 195, kind: "cache", book2: true },
+  { id: "cache-a", label: "Cache Alpha", ...site("cache-a"), kind: "cache" },
+  { id: "cache-b", label: "Cache Bravo", ...site("cache-b"), kind: "cache" },
+  { id: "cache-r", label: "Ridge cache", ...site("cache-r"), kind: "cache" },
+  { id: "cache-c", label: "Coast cache", ...site("cache-c"), kind: "cache", book2: true },
   { id: "sensor", label: "Sensor mast", x: 12, z: 58, kind: "poi" },
-  { id: "ruin", label: "Ruin approach", x: 18, z: 155, kind: "ruin" },
+  { id: "ruin", label: "Ruin approach", ...site("ruin"), kind: "ruin" },
   { id: "ridge7", label: "Ridge-7", x: -110, z: 55, kind: "ridge" },
-  { id: "coast", label: "Kaguyahime memorial", x: 22, z: 200, kind: "coast", book2: true },
-  { id: "npc-t", label: "Thornhill", x: -18, z: 14, kind: "npc" },
-  { id: "npc-c", label: "Castillo", x: 8, z: 24, kind: "npc" },
+  {
+    id: "coast",
+    label: "Kaguyahime memorial",
+    ...site("coast-memorial"),
+    kind: "coast",
+    book2: true,
+  },
+  { id: "npc-t", label: "Thornhill", ...site("thornhill"), kind: "npc" },
+  { id: "npc-c", label: "Castillo", ...site("castillo"), kind: "npc" },
 ];
 
 export const SCAN_TARGETS: ScanTarget[] = [
@@ -566,8 +583,7 @@ export const SCAN_TARGETS: ScanTarget[] = [
     id: "scan-collar",
     title: "ZPE modulation collar",
     kind: "structure",
-    x: -22,
-    z: 12,
+    ...site("gen-west"),
     radius: 10,
     codexId: "collars",
   },
@@ -584,8 +600,7 @@ export const SCAN_TARGETS: ScanTarget[] = [
     id: "scan-ruin",
     title: "Alloy chamber",
     kind: "anomaly",
-    x: 18,
-    z: 155,
+    ...site("ruin"),
     radius: 16,
     codexId: "ruins",
   },
@@ -611,8 +626,7 @@ export const SCAN_TARGETS: ScanTarget[] = [
     id: "scan-coast",
     title: "Kaguyahime memorial",
     kind: "anomaly",
-    x: 22,
-    z: 200,
+    ...site("coast-memorial"),
     radius: 14,
     codexId: "kaguyahime",
     book2: true,
@@ -670,12 +684,11 @@ export const WORLD = {
   colonyCenter: [0, 0, 8] as const,
   southGate: [0, 0, 42] as const,
   treelineZ: 68,
-  ruinPos: [18, 0, 155] as const,
+  ruinPos: sitePos("ruin"),
   herdPos: [-55, 0, 95] as const,
-  ridgeBeacon: [-112, 0, 58] as const,
-  ridgeOverlook: [-118, 0, 62] as const,
-  coastMemorial: [22, 0, 200] as const,
-  domeHatch: [0, 0, 6] as const,
+  ridgeOverlook: sitePos("ridge-beacon"),
+  coastMemorial: sitePos("coast-memorial"),
+  domeHatch: sitePos("dome-command"),
   bounds: 260,
   fernPulse: 4.7,
   dayLengthSec: 480,

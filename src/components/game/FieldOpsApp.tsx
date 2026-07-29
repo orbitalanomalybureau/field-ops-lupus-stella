@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useGameStore } from "@/game/store";
 import type { GamePhase } from "@/game/types";
 import { onHostMessage, postToParent } from "@/lib/embed";
-import { BootScreen } from "./overlays/BootScreen";
+import { BootScreen, InsertionTransition } from "./overlays/BootScreen";
 import { CharacterSelect } from "./overlays/CharacterSelect";
 import { Briefing } from "./overlays/Briefing";
 import { HUD } from "./overlays/HUD";
@@ -14,6 +14,7 @@ import { PauseMenu } from "./overlays/PauseMenu";
 import { DialogueModal } from "./overlays/DialogueModal";
 import { JournalPanel } from "./overlays/JournalPanel";
 import { SettingsPanel } from "./overlays/SettingsPanel";
+import { KeybindOverlay, Tutorial } from "./overlays/Tutorial";
 
 type Props = {
   embed?: boolean;
@@ -34,6 +35,7 @@ const WORLD_PHASES: GamePhase[] = [
 export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   const phase = useGameStore((s) => s.phase);
   const photoMode = useGameStore((s) => s.photoMode);
+  const reducedMotion = useGameStore((s) => s.reducedMotion);
   const setPhase = useGameStore((s) => s.setPhase);
   const setEmbedMode = useGameStore((s) => s.setEmbedMode);
   const hydrate = useGameStore((s) => s.hydrate);
@@ -43,6 +45,8 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   const openJournal = useGameStore((s) => s.openJournal);
   const togglePhoto = useGameStore((s) => s.togglePhotoMode);
   const [mounted, setMounted] = useState(false);
+  const [inserting, setInserting] = useState(false);
+  const insertionSpent = useRef(false);
   const [GameCanvas, setGameCanvas] = useState<null | React.ComponentType>(
     null,
   );
@@ -60,12 +64,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
     }
     if (skipBoot || embed) {
       if (useGameStore.getState().phase === "boot") setPhase("select");
-      return;
     }
-    const t = window.setTimeout(() => {
-      if (useGameStore.getState().phase === "boot") setPhase("select");
-    }, 1400);
-    return () => window.clearTimeout(t);
   }, [
     setPhase,
     setEmbedMode,
@@ -77,6 +76,21 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   ]);
 
   useEffect(() => startAutosave(), [startAutosave]);
+
+  const finishBoot = useCallback(() => {
+    if (useGameStore.getState().phase === "boot") setPhase("select");
+  }, [setPhase]);
+
+  const endInsertion = useCallback(() => setInserting(false), []);
+
+  // The first frame of the world is the expensive one — chunk fetch plus every
+  // shader in the scene — and it is spent on a black canvas. Cover it once per
+  // session, on whichever route reaches the surface: deploy, resume, deep link.
+  useEffect(() => {
+    if (insertionSpent.current || !WORLD_PHASES.includes(phase)) return;
+    insertionSpent.current = true;
+    setInserting(true);
+  }, [phase]);
 
   useEffect(() => {
     const unsubscribe = onHostMessage((msg) => {
@@ -158,7 +172,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
 
   return (
     <div
-      className={`relative w-full overflow-hidden bg-void text-fg ${embed ? "h-full min-h-[480px]" : "h-dvh"}`}
+      className={`relative w-full overflow-hidden bg-void text-fg ${embed ? "h-full min-h-[480px]" : "h-dvh"} ${reducedMotion ? "reduced-motion" : ""}`}
       data-fieldops-embed={embed ? "1" : "0"}
     >
       {inWorld && GameCanvas && (
@@ -167,7 +181,9 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
         </div>
       )}
 
-      {phase === "boot" && !skipBoot && !embed && <BootScreen />}
+      {phase === "boot" && !skipBoot && !embed && (
+        <BootScreen onDone={finishBoot} />
+      )}
       {(phase === "select" || (phase === "boot" && (skipBoot || embed))) && (
         <CharacterSelect />
       )}
@@ -179,6 +195,8 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
           <ClickToPlay />
         </>
       )}
+      {inWorld && !photoMode && <Tutorial />}
+      {inWorld && <KeybindOverlay />}
       {phase === "photo" && (
         <>
           <button
@@ -202,6 +220,10 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
 
       {!embed && !photoMode && (
         <div className="terminal-scan absolute inset-0 z-50 opacity-30" />
+      )}
+
+      {inserting && (
+        <InsertionTransition ready={Boolean(GameCanvas)} onDone={endInsertion} />
       )}
     </div>
   );

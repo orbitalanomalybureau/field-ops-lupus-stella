@@ -10,6 +10,7 @@ import {
 } from "./data";
 import { postToParent } from "@/lib/embed";
 import { passesCeiling, visibleObjectivesOf } from "./selectors";
+import { getAudio } from "./audio";
 import type {
   AnimState,
   CharacterId,
@@ -277,10 +278,8 @@ function mergeCodex(saved?: CodexEntry[]): CodexEntry[] {
 function beginPlay(get: () => GameStore) {
   get().persist();
   if (typeof window !== "undefined") {
-    import("./audio").then(({ getAudio }) => {
-      getAudio().resume();
-      getAudio().setMasterVolume?.(get().masterVolume);
-    });
+    getAudio().resume();
+    getAudio().setMasterVolume?.(get().masterVolume);
   }
   postToParent({ type: "fieldops:started", operative: get().characterId });
 }
@@ -389,9 +388,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
   setMasterVolume: (masterVolume) => {
     set({ masterVolume: Math.max(0, Math.min(1, masterVolume)) });
-    import("./audio").then(({ getAudio }) =>
-      getAudio().setMasterVolume?.(get().masterVolume),
-    );
+    getAudio().setMasterVolume?.(get().masterVolume);
   },
 
   togglePause: () => {
@@ -550,7 +547,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   setTracked: (trackedByFang) => {
     if (trackedByFang && !get().trackedByFang) {
-      import("./audio").then(({ getAudio }) => getAudio().pulseAlert());
+      getAudio().pulseAlert();
     }
     set({ trackedByFang });
   },
@@ -689,7 +686,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ ruinSealed: true });
       get().pushMessage("CHAMBER SEAL — NO RESPONSE");
       if (first) get().unlockCodex("seal");
-      import("./audio").then(({ getAudio }) => getAudio().pulseAlert());
+      getAudio().pulseAlert();
       get().persist();
       return;
     }
@@ -697,7 +694,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().completeObjective("ruins");
     get().unlockCodex("ruins");
     get().pushMessage("CHAMBER SEAL — BREACHED");
-    import("./audio").then(({ getAudio }) => getAudio().pulseInteract());
+    getAudio().pulseInteract();
   },
 
   finishMission: () => {

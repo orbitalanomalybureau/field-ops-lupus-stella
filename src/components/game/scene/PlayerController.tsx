@@ -1,14 +1,26 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameStore } from "@/game/store";
 import { WORLD } from "@/game/data";
-import { sampleHeight } from "@/game/worldHeight";
+import { colliders, entitiesOfKind } from "@/game/entities";
+import {
+  addMouseLook,
+  attachKeyboard,
+  consumeEdge,
+  debugSetKeys,
+  snapshot,
+} from "@/game/input";
+import {
+  SLIDE_SLOPE,
+  sampleHeight,
+  slopeInfoAt,
+  slopeSpeedFactor,
+} from "@/game/worldHeight";
 import { getAudio } from "@/game/audio";
 import { AnimatedCharacter } from "./AnimatedCharacter";
+import type { Collider } from "@/game/entities";
 import type { AnimState } from "@/game/types";
-
-type Keys = Set<string>;
 
 // Terrain.tsx builds one 480-unit plane centred on z=90; anything past its edge
 // is skybox void. The walk box is derived from that mesh so the two cannot
@@ -20,30 +32,73 @@ const WALK_MAX_X = Math.min(WORLD.bounds, TERRAIN_EDGE);
 const WALK_MIN_Z = Math.max(-40, TERRAIN_CENTER_Z - TERRAIN_EDGE);
 const WALK_MAX_Z = Math.min(WORLD.bounds + 40, TERRAIN_CENTER_Z + TERRAIN_EDGE);
 
-function getTouch() {
-  return (
-    window as unknown as {
-      __touchInput?: {
-        mx: number;
-        my: number;
-        lx: number;
-        ly: number;
-        sprint: boolean;
-        interact: boolean;
-        scan?: boolean;
-      };
-    }
-  ).__touchInput;
+/** 26 m/s² against a 7.4 m/s impulse: a ~1 m hop with ~0.6 s of air. */
+const GRAVITY = 26;
+const JUMP_SPEED = 7.4;
+/** Weak air control — a sprint-jump off Ridge-7 should keep its momentum. */
+const AIR_CONTROL = 2.6;
+const SLIDE_ACCEL = 20;
+const SLIDE_STEER = 5;
+const SLIDE_MAX_SPEED = 17;
+const STAND_UP_SEC = 0.5;
+/** Hysteresis, or ground sitting on the threshold stutters in and out. */
+const SLIDE_EXIT = SLIDE_SLOPE - 0.07;
+const CAM_PAD = 0.45;
+const CAM_MIN_DIST = 1.5;
+
+/** Centre of the command dome — the one shell the player can be inside. */
+const HATCH_X = WORLD.domeHatch[0];
+const HATCH_Z = WORLD.domeHatch[2];
+
+/**
+ * Distance from the origin to the first collider along a unit direction, or
+ * `max` if the segment is clear.
+ *
+ * Colliders are tested as vertical cylinders rather than spheres: a light
+ * tower is 8 m tall and 0.5 m wide, and a single sphere either misses it
+ * entirely or swallows the ground around its base.
+ */
+function blockedDistance(
+  list: readonly Collider[],
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  max: number,
+): number {
+  const a = dx * dx + dz * dz;
+  if (a < 1e-6) return max;
+  let nearest = max;
+  for (const c of list) {
+    const r = c.radius + CAM_PAD;
+    const px = ox - c.x;
+    const pz = oz - c.z;
+    const cc = px * px + pz * pz - r * r;
+    // Already inside the footprint: there is nothing in front to duck behind.
+    if (cc <= 0) continue;
+    const b = 2 * (px * dx + pz * dz);
+    const disc = b * b - 4 * a * cc;
+    if (disc <= 0) continue;
+    const t = (-b - Math.sqrt(disc)) / (2 * a);
+    if (t <= 0 || t >= nearest) continue;
+    if (oy + dy * t < sampleHeight(c.x, c.z) + (c.height ?? 3)) nearest = t;
+  }
+  return nearest;
 }
 
 export function PlayerController() {
   const group = useRef<THREE.Group>(null);
-  const keys = useRef<Keys>(new Set());
   const init = useGameStore.getState().playerPos;
   const initYaw = useGameStore.getState().playerYaw;
   const yaw = useRef(initYaw || Math.PI);
   const pitch = useRef(0.06);
   const vel = useRef(new THREE.Vector3());
+  const velY = useRef(0);
+  const grounded = useRef(true);
+  const sliding = useRef(false);
+  const standUp = useRef(0);
   const { camera, gl } = useThree();
   const locked = useRef(false);
   const forward = useRef(new THREE.Vector3(0, 0, 1));
@@ -58,8 +113,15 @@ export function PlayerController() {
   const staminaLocal = useRef(100);
   const audioTick = useRef(0);
   const stepAcc = useRef(0);
+  const wasPauseable = useRef(false);
   /** Rolling frame times, so QA can assert a framerate floor. */
   const frameTimes = useRef<number[]>([]);
+
+  const solid = useMemo(() => colliders(), []);
+  const generators = useMemo(
+    () => entitiesOfKind("generator").map((e) => [e.x, e.z] as const),
+    [],
+  );
 
   const character = useGameStore((s) => s.getCharacter());
   const speedMul = character?.speed ?? 1;
@@ -70,19 +132,7 @@ export function PlayerController() {
 
   useEffect(() => {
     const el = gl.domElement;
-    const onKeyDown = (e: KeyboardEvent) => {
-      keys.current.add(e.code);
-      if (e.code === "Space" || e.code === "Tab") e.preventDefault();
-      if (e.code === "Escape") useGameStore.getState().togglePause();
-      if (e.code === "KeyF") {
-        const s = useGameStore.getState();
-        if (s.phase === "playing" || s.phase === "ruins") {
-          s.setCombat(!s.combatEnabled);
-        }
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
-    const clear = () => keys.current.clear();
+    const detachKeyboard = attachKeyboard();
     const onClick = () => {
       const phase = useGameStore.getState().phase;
       if (
@@ -93,22 +143,23 @@ export function PlayerController() {
         phase === "photo"
       )
         return;
-      if (!locked.current) el.requestPointerLock?.();
+      if (locked.current) return;
+      // Rejects when the embedding page has not granted pointer-lock (the
+      // iframe needs allow="pointer-lock"), and in some headless contexts.
+      // Newer browsers return a promise, so an unhandled rejection would
+      // surface as a page error on every click; the game is still playable
+      // without lock via drag-to-look, so this degrades quietly.
+      const lock = el.requestPointerLock?.() as unknown;
+      if (lock instanceof Promise) lock.catch(() => {});
     };
     const onLockChange = () => {
       locked.current = document.pointerLockElement === el;
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!locked.current) return;
-      yaw.current -= e.movementX * 0.002;
-      pitch.current -= e.movementY * 0.0017;
-      pitch.current = THREE.MathUtils.clamp(pitch.current, -0.95, 0.55);
+      addMouseLook(e.movementX, e.movementY);
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", clear);
-    document.addEventListener("visibilitychange", clear);
     el.addEventListener("click", onClick);
     document.addEventListener("pointerlockchange", onLockChange);
     document.addEventListener("mousemove", onMouseMove);
@@ -124,17 +175,25 @@ export function PlayerController() {
         const median = samples[Math.floor(samples.length / 2)];
         return median > 0 ? 1 / median : 0;
       },
-      setKeys: (codes: string[]) => {
-        keys.current.clear();
-        for (const c of codes) keys.current.add(c);
+      setKeys: debugSetKeys,
+      // Headless WebGL runs this scene at a couple of frames a second, and
+      // `delta` is clamped for physics stability, so simulated time crawls:
+      // walking twelve metres in a test costs minutes of wall clock. Tests
+      // place the operative directly instead.
+      teleport: (x: number, z: number, newYaw?: number) => {
+        const g = group.current;
+        if (!g) return;
+        g.position.set(x, sampleHeight(x, z), z);
+        vel.current.set(0, 0, 0);
+        if (newYaw !== undefined) yaw.current = newYaw;
+        const s = useGameStore.getState();
+        s.setPlayerPos(g.position.x, g.position.y, g.position.z);
+        s.setPlayerYaw(yaw.current);
       },
     };
 
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", clear);
-      document.removeEventListener("visibilitychange", clear);
+      detachKeyboard();
       el.removeEventListener("click", onClick);
       document.removeEventListener("pointerlockchange", onLockChange);
       document.removeEventListener("mousemove", onMouseMove);
@@ -146,7 +205,21 @@ export function PlayerController() {
     if (frameTimes.current.push(delta) > 120) frameTimes.current.shift();
     const g = group.current;
     if (!g) return;
+
+    // Exactly one snapshot per frame, taken before any early return: look
+    // deltas accumulate inside the module and would land as a whip on resume.
+    const input = snapshot();
     const phase = useGameStore.getState().phase;
+    const pauseable =
+      phase === "playing" || phase === "ruins" || phase === "paused";
+    // A modal that closes on Escape flips the phase inside the same keypress,
+    // so a pause edge only belongs to us if the previous frame was pauseable
+    // too — otherwise closing a dialogue would immediately pause the game.
+    if (consumeEdge("pause") && pauseable && wasPauseable.current) {
+      useGameStore.getState().togglePause();
+    }
+    wasPauseable.current = pauseable;
+
     if (
       phase === "paused" ||
       phase === "dialogue" ||
@@ -155,38 +228,42 @@ export function PlayerController() {
     )
       return;
 
-    const touch = getTouch();
-    if (touch && (Math.abs(touch.lx) > 0.05 || Math.abs(touch.ly) > 0.05)) {
-      yaw.current -= touch.lx * 1.9 * d;
-      pitch.current -= touch.ly * 1.25 * d;
-      pitch.current = THREE.MathUtils.clamp(pitch.current, -0.95, 0.55);
+    if (input.combat && (phase === "playing" || phase === "ruins")) {
+      const s = useGameStore.getState();
+      s.setCombat(!s.combatEnabled);
     }
+
+    yaw.current -= input.lookX;
+    pitch.current = THREE.MathUtils.clamp(
+      pitch.current - input.lookY,
+      -0.95,
+      0.55,
+    );
 
     forward.current.set(-Math.sin(yaw.current), 0, -Math.cos(yaw.current));
     right.current.set(Math.cos(yaw.current), 0, -Math.sin(yaw.current));
 
-    let mx = 0;
-    let mz = 0;
-    if (keys.current.has("KeyW") || keys.current.has("ArrowUp")) mz += 1;
-    if (keys.current.has("KeyS") || keys.current.has("ArrowDown")) mz -= 1;
-    if (keys.current.has("KeyD") || keys.current.has("ArrowRight")) mx += 1;
-    if (keys.current.has("KeyA") || keys.current.has("ArrowLeft")) mx -= 1;
-    if (touch) {
-      mx += touch.mx;
-      mz -= touch.my;
-    }
-    const len = Math.hypot(mx, mz);
-    if (len > 1) {
-      mx /= len;
-      mz /= len;
+    const mx = input.moveX;
+    const mz = input.moveZ;
+    const dirX = forward.current.x * mz + right.current.x * mx;
+    const dirZ = forward.current.z * mz + right.current.z * mx;
+
+    // Footing goes above SLIDE_SLOPE, and is not regained the instant the
+    // ground flattens: the operative skids out the stand-up window first.
+    const slope = slopeInfoAt(g.position.x, g.position.z);
+    if (grounded.current && slope.slope > SLIDE_SLOPE) {
+      sliding.current = true;
+      standUp.current = STAND_UP_SEC;
+    } else if (
+      sliding.current &&
+      !(grounded.current && slope.slope > SLIDE_EXIT)
+    ) {
+      standUp.current -= d;
+      if (standUp.current <= 0) sliding.current = false;
     }
 
     const wantSprint =
-      (keys.current.has("ShiftLeft") ||
-        keys.current.has("ShiftRight") ||
-        !!touch?.sprint) &&
-      mz > 0 &&
-      staminaLocal.current > 2;
+      input.sprint && mz > 0 && staminaLocal.current > 2 && !sliding.current;
 
     if (wantSprint) {
       staminaLocal.current = Math.max(0, staminaLocal.current - (18 * d) / stamMul);
@@ -195,8 +272,7 @@ export function PlayerController() {
     }
     useGameStore.getState().setStamina(staminaLocal.current);
 
-    const scanning =
-      keys.current.has("KeyQ") || keys.current.has("KeyV") || !!touch?.scan;
+    const scanning = input.scan;
     useGameStore.getState().setScanner(scanning);
 
     const weather = useGameStore.getState().weather;
@@ -204,17 +280,27 @@ export function PlayerController() {
       weather === "storm" ? 0.78 : weather === "rain" ? 0.9 : 1;
     const inside = useGameStore.getState().insideDome;
 
-    const base =
-      (wantSprint ? 11.5 : scanning ? 3.2 : 6.4) *
-      speedMul *
-      weatherSlow *
-      (inside ? 0.85 : 1);
-    targetVel.current.set(
-      (forward.current.x * mz + right.current.x * mx) * base,
-      0,
-      (forward.current.z * mz + right.current.z * mx) * base,
-    );
-    vel.current.lerp(targetVel.current, 1 - Math.exp(-(wantSprint ? 14 : 11) * d));
+    if (sliding.current && grounded.current) {
+      // Scree: the fall line drives, input only steers, friction caps the run.
+      vel.current.x +=
+        (slope.dx * slope.slope * SLIDE_ACCEL + dirX * SLIDE_STEER) * d;
+      vel.current.z +=
+        (slope.dz * slope.slope * SLIDE_ACCEL + dirZ * SLIDE_STEER) * d;
+      vel.current.multiplyScalar(Math.exp(-1.4 * d));
+      if (vel.current.length() > SLIDE_MAX_SPEED) {
+        vel.current.setLength(SLIDE_MAX_SPEED);
+      }
+    } else {
+      const base =
+        (wantSprint ? 11.5 : scanning ? 3.2 : 6.4) *
+        speedMul *
+        weatherSlow *
+        (inside ? 0.85 : 1) *
+        (grounded.current ? slopeSpeedFactor(slope, dirX, dirZ) : 1);
+      targetVel.current.set(dirX * base, 0, dirZ * base);
+      const accel = !grounded.current ? AIR_CONTROL : wantSprint ? 14 : 11;
+      vel.current.lerp(targetVel.current, 1 - Math.exp(-accel * d));
+    }
 
     g.position.x += vel.current.x * d;
     g.position.z += vel.current.z * d;
@@ -233,33 +319,47 @@ export function PlayerController() {
       }
     }
 
-    const groundY = sampleHeight(g.position.x, g.position.z);
-    g.position.y = THREE.MathUtils.lerp(
-      g.position.y,
-      groundY,
-      1 - Math.exp(-14 * d),
-    );
-
-    for (const [ox, oz, r] of [
-      [0, 6, inside ? 0.5 : 4.5],
-      [-14, 2, 4.5],
-      [14, 4, 4.5],
-      [-8, 18, 4.5],
-      [10, 16, 4.5],
-    ] as const) {
-      if (inside && ox === 0) continue;
-      const dx = g.position.x - ox;
-      const dz = g.position.z - oz;
+    for (const c of solid) {
+      // The command dome shell is the one structure the player can be inside;
+      // keeping it would shove them straight back out through the hatch.
+      if (inside && Math.hypot(c.x - HATCH_X, c.z - HATCH_Z) < 3) continue;
+      const dx = g.position.x - c.x;
+      const dz = g.position.z - c.z;
       const dist = Math.hypot(dx, dz);
-      if (dist < r && dist > 0.001) {
-        const push = (r - dist) / r;
+      if (dist < c.radius && dist > 0.001) {
+        const push = (c.radius - dist) / c.radius;
         g.position.x += (dx / dist) * push * 0.6;
         g.position.z += (dz / dist) * push * 0.6;
       }
     }
 
+    const groundY = sampleHeight(g.position.x, g.position.z);
+    if (input.jump && grounded.current && !sliding.current) {
+      velY.current = JUMP_SPEED;
+      grounded.current = false;
+    }
+    if (grounded.current) {
+      // The ground-follow lerp is what keeps walking the analytic terrain
+      // smooth; only the airborne branch may move y directly.
+      g.position.y = THREE.MathUtils.lerp(
+        g.position.y,
+        groundY,
+        1 - Math.exp(-14 * d),
+      );
+    } else {
+      velY.current -= GRAVITY * d;
+      g.position.y += velY.current * d;
+      if (g.position.y <= groundY) {
+        const impact = -velY.current;
+        g.position.y = groundY;
+        velY.current = 0;
+        grounded.current = true;
+        if (impact > 4) getAudio().footstep?.(true);
+      }
+    }
+
     const spd = vel.current.length();
-    if (spd > 0.8) {
+    if (spd > 0.8 && grounded.current && !sliding.current) {
       bob.current += d * spd * 1.4;
       stepAcc.current += d * spd;
       if (stepAcc.current > (wantSprint ? 1.8 : 2.6)) {
@@ -270,7 +370,8 @@ export function PlayerController() {
     const bobY = Math.sin(bob.current) * Math.min(spd / 10, 1) * 0.06;
 
     let anim: AnimState = "idle";
-    if (scanning) anim = "scan";
+    if (sliding.current || !grounded.current) anim = "run";
+    else if (scanning) anim = "scan";
     else if (useGameStore.getState().combatEnabled && spd < 1) anim = "combat";
     else if (wantSprint && spd > 2) anim = "run";
     else if (spd > 0.6) anim = "walk";
@@ -286,6 +387,39 @@ export function PlayerController() {
       g.position.y + height + bobY - pitch.current * 0.8,
       g.position.z - forward.current.z * lookDist,
     );
+
+    // Duck in front of whatever the chase camera would otherwise sit inside.
+    // The correction moves the target, not the camera, so the smoothing below
+    // still does the actual travel.
+    const headY = g.position.y + 1.5;
+    const cx = desired.current.x - g.position.x;
+    const cy = desired.current.y - headY;
+    const cz = desired.current.z - g.position.z;
+    const camDist = Math.hypot(cx, cy, cz);
+    if (camDist > 0.001) {
+      const ux = cx / camDist;
+      const uy = cy / camDist;
+      const uz = cz / camDist;
+      const hit = blockedDistance(
+        solid,
+        g.position.x,
+        headY,
+        g.position.z,
+        ux,
+        uy,
+        uz,
+        camDist,
+      );
+      if (hit < camDist) {
+        const pull = Math.max(CAM_MIN_DIST, hit - CAM_PAD);
+        desired.current.set(
+          g.position.x + ux * pull,
+          headY + uy * pull,
+          g.position.z + uz * pull,
+        );
+      }
+    }
+
     const camGround = sampleHeight(desired.current.x, desired.current.z) + 0.6;
     if (desired.current.y < camGround) desired.current.y = camGround;
 
@@ -323,9 +457,6 @@ export function PlayerController() {
     store.setPlayerYaw(yaw.current);
     store.setCompass(((-yaw.current * 180) / Math.PI + 360) % 360);
 
-    // expose combat mul for creatures via window
-    (window as unknown as { __combatMul: number }).__combatMul = combatMul;
-
     pathTimer.current += d;
     if (pathTimer.current > 0.5 && spd > 0.5) {
       pathTimer.current = 0;
@@ -333,12 +464,7 @@ export function PlayerController() {
     }
 
     let signal = 0.22;
-    for (const [gx, gz] of [
-      [-22, 12],
-      [22, 10],
-      [-12, -8],
-      [16, -6],
-    ] as const) {
+    for (const [gx, gz] of generators) {
       const dd = Math.hypot(g.position.x - gx, g.position.z - gz);
       if (dd < 22) signal += (1 - dd / 22) * 0.14;
     }

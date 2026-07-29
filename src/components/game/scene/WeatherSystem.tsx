@@ -2,21 +2,17 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameStore } from "@/game/store";
-import { getAudio } from "@/game/audio";
-import type { WeatherKind } from "@/game/types";
+import { getLightningStrike } from "./useWeatherSim";
 
-/** Rain / storm particles, lightning, weather state machine. */
+/** Rain / storm particles and the lightning flash. Presentation only: the
+ *  state machine lives in useWeatherSim, which runs even when this does not. */
 export function WeatherSystem() {
   const rainRef = useRef<THREE.Points>(null);
   const dustRef = useRef<THREE.Points>(null);
   const flash = useRef<THREE.PointLight>(null);
   const count = 2800;
   const dustCount = 500;
-  const weatherTimer = useRef(0);
-  const stormHold = useRef(0);
-  const nextStrike = useRef(3);
-  const phaseClock = useRef(0);
-  const lastKind = useRef<WeatherKind>("haze");
+  const lastStrike = useRef(getLightningStrike().id);
 
   const { positions, velocities } = useMemo(() => {
     const positions = new Float32Array(count * 3);
@@ -44,38 +40,7 @@ export function WeatherSystem() {
     const d = Math.min(delta, 0.05);
     if (useGameStore.getState().phase === "paused") return;
 
-    phaseClock.current += d;
-    weatherTimer.current += d;
-
-    const cycle = phaseClock.current % 100;
-    let kind: WeatherKind = "haze";
-    let intensity = 0.3;
-    if (cycle < 22) {
-      kind = "clear";
-      intensity = 0.1;
-    } else if (cycle < 42) {
-      kind = "haze";
-      intensity = 0.35;
-    } else if (cycle < 62) {
-      kind = "rain";
-      intensity = 0.55;
-    } else if (cycle < 82) {
-      kind = "storm";
-      intensity = 0.85 + Math.sin(phaseClock.current) * 0.1;
-      stormHold.current += d;
-      if (stormHold.current > 18) {
-        useGameStore.getState().markStormSurvived();
-      }
-    } else {
-      kind = "rain";
-      intensity = 0.4;
-      stormHold.current = 0;
-    }
-
-    if (kind !== lastKind.current) {
-      lastKind.current = kind;
-      useGameStore.getState().setWeather(kind, intensity);
-    }
+    const kind = useGameStore.getState().weather;
 
     const pts = rainRef.current;
     if (pts) {
@@ -105,22 +70,11 @@ export function WeatherSystem() {
 
     if (flash.current) {
       if (kind === "storm") {
-        nextStrike.current -= d;
-        if (nextStrike.current <= 0) {
-          flash.current.intensity = 40 + Math.random() * 50;
-          flash.current.position.set(
-            (Math.random() - 0.5) * 100,
-            40,
-            40 + Math.random() * 80,
-          );
-          nextStrike.current = 2 + Math.random() * 5;
-          getAudio().pulseAlert();
-          const p = useGameStore.getState().playerPos;
-          if (p.x < -80 && p.y > 8) {
-            useGameStore
-              .getState()
-              .setHealth(useGameStore.getState().health - 2);
-          }
+        const s = getLightningStrike();
+        if (s.id !== lastStrike.current) {
+          lastStrike.current = s.id;
+          flash.current.intensity = s.power;
+          flash.current.position.set(s.x, s.y, s.z);
         } else {
           flash.current.intensity = THREE.MathUtils.lerp(
             flash.current.intensity,
@@ -131,13 +85,6 @@ export function WeatherSystem() {
       } else {
         flash.current.intensity = 0;
       }
-    }
-
-    if (weatherTimer.current > 0.4) {
-      weatherTimer.current = 0;
-      const a = getAudio();
-      a.setOutdoor(kind === "storm" ? 1 : kind === "rain" ? 0.7 : 0.4);
-      if (kind === "storm") a.setTension(0.6);
     }
   });
 

@@ -18,19 +18,16 @@ function Cache({ id, x, z }: { id: string; x: number; z: number }) {
   });
   if (looted) return null;
   return (
-    <group position={[x, y, z]}>
-      <mesh ref={ref} castShadow position={[0, 0.55, 0]}>
-        <boxGeometry args={[0.7, 0.45, 0.5]} />
-        <meshStandardMaterial
-          color="#c45c2a"
-          emissive="#c45c2a"
-          emissiveIntensity={0.35}
-          metalness={0.4}
-          roughness={0.45}
-        />
-      </mesh>
-      <pointLight color="#c45c2a" intensity={2} distance={6} position={[0, 1, 0]} />
-    </group>
+    <mesh ref={ref} castShadow position={[x, y + 0.55, z]}>
+      <boxGeometry args={[0.7, 0.45, 0.5]} />
+      <meshStandardMaterial
+        color="#c45c2a"
+        emissive="#c45c2a"
+        emissiveIntensity={1.4}
+        metalness={0.4}
+        roughness={0.45}
+      />
+    </mesh>
   );
 }
 
@@ -53,12 +50,11 @@ function SensorMast() {
         <meshStandardMaterial
           color="#4a9e8f"
           emissive="#3d9e8f"
-          emissiveIntensity={0.4}
+          emissiveIntensity={1.6}
           metalness={0.6}
           side={THREE.DoubleSide}
         />
       </mesh>
-      <pointLight color="#3d9e8f" intensity={3} distance={14} position={[0, 6, 0]} />
     </group>
   );
 }

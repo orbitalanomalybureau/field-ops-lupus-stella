@@ -13,11 +13,15 @@ import { NPCs } from "./NPCs";
 import { KaguyahimeCoast } from "./KaguyahimeCoast";
 import { CommandDomeInterior, DomeHatchMarker } from "./CommandDome";
 import { PostFX } from "./PostFX";
+import { useWeatherSim } from "./useWeatherSim";
 import { WORLD } from "@/game/data";
 import { useGameStore } from "@/game/store";
 
 export function GameScene() {
   const reduced = useGameStore((s) => s.reducedMotion);
+
+  // Simulation is never gated on reducedMotion — only the particles are.
+  useWeatherSim();
 
   return (
     <>

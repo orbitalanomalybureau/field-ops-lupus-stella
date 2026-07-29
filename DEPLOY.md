@@ -1,69 +1,89 @@
-# Deploy Field Ops → GitHub + Cloudflare (or Vercel)
+# Deploy Field Ops
 
-This app is a TanStack Start / Vite project that builds to **Vercel-compatible Nitro output** and can also be served as a static+serverless deploy. For **Cloudflare Pages**, use the static client assets + a Node/Workers adapter if you need SSR; for the simplest path, **Vercel** matches the existing `nitro({ preset: "vercel" })` config.
+TanStack Start / Vite building to Nitro's **Vercel** preset. Vercel is the
+supported target; everything below is verified against it.
+
+> Cloudflare Pages was previously documented speculatively and never actually
+> ported. It has been removed rather than left to rot — if you want it, switch
+> the Nitro preset in `vite.config.ts` to `cloudflare-pages`, add a
+> `wrangler.jsonc`, and confirm the presence/telemetry routes work on Workers
+> before advertising it.
 
 ## 1. Push to GitHub
 
 ```bash
-git init   # if needed
-git remote add origin git@github.com:YOU/field-ops-lupus-stella.git
-git add .
-git commit -m "Field Ops: Lupus Stella open world"
+git remote add origin git@github.com:orbitalanomalybureau/field-ops-lupus-stella.git
 git push -u origin main
 ```
 
-## 2. Cloudflare Pages
+## 2. Vercel
 
-1. Cloudflare Dashboard → **Workers & Pages** → **Create** → **Pages** → Connect GitHub repo.
-2. Build settings:
-   - **Build command:** `npm run build`
-   - **Build output directory:** `.vercel/output/static`  
-     (or configure a Cloudflare adapter later; for pure SPA preview of the client shell, also try `dist/client` if present after build)
-3. Environment: Node **22**.
-4. After deploy, note your URL, e.g. `https://field-ops.pages.dev`.
+1. Import the repo. Framework preset: **Other**. Build command `npm run build`.
+2. Node version comes from `.nvmrc` (22).
+3. Nitro writes `.vercel/output` — Vercel picks it up with no output-directory
+   setting needed.
+4. `vercel.json` is committed and supplies the cache and security headers,
+   including `frame-ancestors` so only the novel site can embed the game.
 
-If SSR routes fail on Pages, prefer **Vercel** import of the same repo (one-click; Nitro preset already set).
+### Environment variables
 
-## 3. Vercel (recommended first deploy)
+| Variable | Required | Purpose |
+|---|---|---|
+| `VITE_EMBED_PARENT_ORIGINS` | no | Comma-separated origins allowed to embed and message the game. Defaults to the exodus2121.com pair. |
+| `VITE_NOVEL_SITE_URL` | no | Base URL for codex "Continue in 2121: EXODUS" links. |
+| `VITE_STUN_URLS` | no | ICE servers for reader-ghost presence. Defaults to public Google + Cloudflare STUN. |
+| `DATABASE_URL` | for presence/telemetry | Postgres (Neon) backing the signaling relay and the event endpoint. Without it, both fall back to an in-memory store, which does **not** work on serverless — each invocation is a fresh instance. |
 
-1. Import the GitHub repo in Vercel.
-2. Framework: Vite / Other; build `npm run build`.
-3. Output uses `.vercel/output` from Nitro automatically on Vercel.
+Run `npm run db:migrate` once after setting `DATABASE_URL` (or add it back to
+the build command) to provision the presence and event tables.
 
-## 4. Wire exodus2121.com Classified Terminal
+## 3. Fonts (last offline step)
+
+`src/routes/__root.tsx` loads IBM Plex from Google Fonts non-blocking, so first
+paint never waits on it. To remove the last third-party runtime request and make
+the PWA fully offline-complete, download the IBM Plex Mono and Sans woff2 files,
+drop them in `public/fonts/`, add `@font-face` rules to `src/styles.css`, and
+delete the `FONT_HREF` link from `__root.tsx`.
+
+## 4. Wire the novel site
 
 ```html
 <iframe
-  src="https://YOUR-HOST/embed?spoiler=book2early"
+  src="https://YOUR-HOST/embed?spoiler=book1"
   title="Field Ops: Lupus Stella"
-  allow="fullscreen; autoplay; pointer-lock"
-  style="width:100%;height:min(80vh,800px);border:0;background:#05060a"
+  allow="fullscreen; autoplay; pointer-lock; gamepad"
+  style="width:100%;aspect-ratio:16/9;border:0;background:#05060a"
 ></iframe>
 ```
 
-Deep links:
+`?spoiler=book1` is the correct default for a Book-I audience and is also the
+game's own default. The full deep-link table and postMessage protocol live in
+[docs/EMBED.md](./docs/EMBED.md); `/terminal` is a working host implementation
+and `public/embed-snippet.html` generates the snippet.
 
-| Query | Effect |
-|-------|--------|
-| `?spoiler=book1` | Book I only |
-| `?spoiler=book2early` | Book I + early II (default) |
-| `?operative=theo` | Pre-select Theo |
-| `?spawn=ridge7` | Next deploy starts at Ridge-7 |
-| `?spawn=coast` | Kaguyahime memorial |
-| `?auto=1` | Auto-start if operative set |
-
-postMessage API: see `/terminal` and `/embed-snippet.html`.
+**Do not skip the save handoff.** Safari and Firefox partition third-party
+storage, so an embedded reader loses all progress on reload unless the host page
+stores the exported save blob first-party. See docs/EMBED.md § Cross-origin
+storage for the ten lines that fix it.
 
 ## 5. PWA
 
-- Manifest: `/manifest.webmanifest`
-- Service worker: `/sw.js` (registered from root layout when available)
+- Manifest `/manifest.webmanifest` — icons, maskable variant, and deep-link shortcuts.
+- Service worker `/sw.js` — network-first navigations, cache-first hashed assets.
+- `scripts/build-sw.mjs` stamps the SW with a build id and the real asset graph
+  after `vite build`, so each deploy lands in a fresh cache and the whole game
+  precaches for offline play.
+- Regenerate icons with `node scripts/gen-icons.mjs`.
 
 ## 6. Checklist before go-live
 
-- [ ] `npm run build` succeeds
-- [ ] `/` playable
-- [ ] `/embed` loads in iframe
-- [ ] `/terminal` shell works
-- [ ] Book I spoiler ceiling hides coast/Tomas
-- [ ] Journal export works
+- [ ] `npm run verify` passes (typecheck, lint, build, bundle budget)
+- [ ] `npm test` passes, including the golden screenshots
+- [ ] `npm run canon:lint` clean
+- [ ] `/` playable start to finish; both endings reachable
+- [ ] `/embed` loads in an iframe on the real novel-site origin
+- [ ] `/terminal` shell reflects phase changes
+- [ ] Book I ceiling hides the coast, Tomas, and Book II codex entries
+- [ ] Journal export downloads and posts over the bridge
+- [ ] Install as a PWA, then load with the network disabled
+- [ ] `VITE_EMBED_PARENT_ORIGINS` set to the production novel-site origins

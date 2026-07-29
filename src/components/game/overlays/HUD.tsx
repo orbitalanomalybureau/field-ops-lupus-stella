@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useGameStore } from "@/game/store";
 import { MARKERS } from "@/game/data";
+import type { WeatherKind } from "@/game/types";
 import {
   Crosshair,
   Map as MapIcon,
@@ -28,6 +29,14 @@ function timeLabel(tod: number) {
   return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")} · ${phase}`;
 }
 
+function weatherClass(weather: WeatherKind) {
+  return weather === "storm"
+    ? "text-warn"
+    : weather === "rain"
+      ? "text-accent"
+      : "text-dim";
+}
+
 export function HUD() {
   const character = useGameStore((s) => s.getCharacter());
   const objectivesRaw = useGameStore((s) => s.objectives);
@@ -51,6 +60,7 @@ export function HUD() {
   const openJournal = useGameStore((s) => s.openJournal);
   const togglePause = useGameStore((s) => s.togglePause);
   const [panel, setPanel] = useState<"none" | "obj" | "codex" | "map">("obj");
+  const [toast, setToast] = useState<string | null>(null);
 
   const objectives = useMemo(
     () => objectivesRaw.filter((o) => !o.book2 || spoiler !== "book1"),
@@ -78,6 +88,16 @@ export function HUD() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Phones get one auto-expiring line instead of the stacked feed; without it
+  // pushMessage output is invisible on the primary form factor.
+  useEffect(() => {
+    const latest = messages[0];
+    if (!latest) return;
+    setToast(latest);
+    const t = window.setTimeout(() => setToast(null), 4200);
+    return () => window.clearTimeout(t);
+  }, [messages]);
 
   const doneCount = objectives.filter((o) => o.done).length;
   const bearingLabel =
@@ -114,15 +134,7 @@ export function HUD() {
           </p>
           <div className="mt-1 flex items-center justify-center gap-1 font-mono text-[10px] text-muted">
             <CloudRain className="h-3 w-3" />
-            <span
-              className={
-                weather === "storm"
-                  ? "text-warn"
-                  : weather === "rain"
-                    ? "text-accent"
-                    : "text-dim"
-              }
-            >
+            <span className={weatherClass(weather)}>
               WX {weather.toUpperCase()}
             </span>
           </div>
@@ -197,17 +209,28 @@ export function HUD() {
       )}
 
       <div className="pointer-events-none absolute bottom-24 left-3 right-3 sm:bottom-5 sm:left-4 sm:right-auto sm:w-72">
+        {toast && (
+          <p className="panel-glass mb-1.5 truncate rounded-md px-2.5 py-1.5 font-mono text-[10px] leading-snug text-muted sm:hidden">
+            {toast}
+          </p>
+        )}
         <div className="panel-glass space-y-2 rounded-md p-3">
           <Bar icon={<Activity className="h-3 w-3" />} label="VITALS" value={health} color="bg-accent" />
           <Bar icon={<span className="font-mono text-[9px]">STM</span>} label="STAMINA" value={stamina} color="bg-primary" />
           <Bar icon={<Radio className="h-3 w-3" />} label="ZPE SIG" value={signalMeter * 100} color="bg-warn" />
-          <div className="flex justify-between font-mono text-[10px]">
+          <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[10px]">
             <span className={combatEnabled ? "text-danger" : "text-dim"}>
               {combatEnabled ? "ARMED" : "SAFE"}
             </span>
             {trackedByFang && (
               <span className="animate-pulse text-warn">TRACKED</span>
             )}
+            <span className="tabular-nums text-fg sm:hidden">
+              {bearingLabel} {Math.round(compass)}°
+            </span>
+            <span className={`sm:hidden ${weatherClass(weather)}`}>
+              WX {weather.toUpperCase()}
+            </span>
             <span className="text-dim">
               {playerPos.x.toFixed(0)},{playerPos.z.toFixed(0)}
             </span>
@@ -215,7 +238,7 @@ export function HUD() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-48 right-3 hidden w-80 space-y-1 sm:bottom-5 sm:right-4 sm:block">
+      <div className="pointer-events-none absolute bottom-5 right-4 hidden w-80 space-y-1 sm:block">
         {messages.slice(0, 5).map((m, i) => (
           <p
             key={`${m}-${i}`}

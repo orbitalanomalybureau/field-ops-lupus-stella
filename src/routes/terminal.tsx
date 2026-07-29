@@ -1,5 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { isAllowedOrigin } from "@/lib/embed";
+import type { InboundMessage, OutboundMessage } from "@/lib/embed";
 
 export const Route = createFileRoute("/terminal")({
   component: TerminalShell,
@@ -7,6 +9,18 @@ export const Route = createFileRoute("/terminal")({
     meta: [{ title: "Classified Terminal — 2121 EXODUS" }],
   }),
 });
+
+/**
+ * Command the framed game. The frame is same-origin here (`/embed`), so the
+ * host targets its own origin — exodus2121.com substitutes the game's origin
+ * and never `"*"`.
+ */
+function sendToFrame(msg: InboundMessage) {
+  const frame = document.getElementById(
+    "fieldops-frame",
+  ) as HTMLIFrameElement | null;
+  frame?.contentWindow?.postMessage(msg, window.location.origin);
+}
 
 /**
  * Mock of the novel site Classified Terminal that hosts Field Ops in a frame.
@@ -38,10 +52,11 @@ function TerminalShell() {
 
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      if (!e.data || typeof e.data !== "object") return;
-      const msg = e.data as { type?: string; phase?: string };
+      if (!isAllowedOrigin(e.origin)) return;
+      const msg = e.data as OutboundMessage | undefined;
+      if (!msg || typeof msg !== "object") return;
       if (msg.type === "fieldops:ready") setPhase("ready");
-      if (msg.type === "fieldops:phase" && msg.phase) setPhase(msg.phase);
+      if (msg.type === "fieldops:phase") setPhase(msg.phase);
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
@@ -110,15 +125,7 @@ function TerminalShell() {
               <button
                 type="button"
                 className="text-muted hover:text-fg"
-                onClick={() => {
-                  const frame = document.getElementById(
-                    "fieldops-frame",
-                  ) as HTMLIFrameElement | null;
-                  frame?.contentWindow?.postMessage(
-                    { type: "fieldops:pause" },
-                    "*",
-                  );
-                }}
+                onClick={() => sendToFrame({ type: "fieldops:pause" })}
               >
                 SEND PAUSE
               </button>

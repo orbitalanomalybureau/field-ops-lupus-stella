@@ -1,5 +1,5 @@
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { WORLD } from "@/game/data";
 import { useGameStore } from "@/game/store";
@@ -11,24 +11,45 @@ type Agent = {
   yaw: number;
   kind: "prismhoof" | "shadowfang";
   phase: number;
+  gait: number;
   learnedBias: THREE.Vector3;
   health: number;
   packRole: number;
 };
 
-function PrismhoofMesh({ bob }: { bob: number }) {
+/** Limb handles resolved at mount so the frame loop never traverses. */
+type Rig = { root: THREE.Group; legs: THREE.Group[] };
+
+// Local +z is forward: agent yaw is atan2(vel.x, vel.z), same as the player.
+// Index order is front-left, front-right, rear-left, rear-right; the gait
+// swings the diagonal pairs (0,3) and (1,2) against each other.
+const PRISMHOOF_LEGS: [number, number][] = [
+  [-0.18, 0.3],
+  [0.18, 0.3],
+  [-0.18, -0.3],
+  [0.18, -0.3],
+];
+
+const SHADOWFANG_LEGS: [number, number][] = [
+  [-0.14, 0.26],
+  [0.14, 0.26],
+  [-0.14, -0.26],
+  [0.14, -0.26],
+];
+
+function PrismhoofMesh() {
   return (
-    <group position={[0, bob, 0]}>
+    <group>
       <mesh castShadow position={[0, 0.75, 0]}>
         <capsuleGeometry args={[0.28, 0.55, 4, 8]} />
         <meshStandardMaterial color="#d0c0a8" roughness={0.65} />
       </mesh>
-      <mesh castShadow position={[0, 1.2, -0.4]}>
+      <mesh castShadow position={[0, 1.2, 0.4]}>
         <sphereGeometry args={[0.22, 10, 10]} />
         <meshStandardMaterial color="#d8cbb8" />
       </mesh>
       {[-0.12, 0.12].map((sx, i) => (
-        <mesh key={i} position={[sx, 1.65, -0.42]} rotation={[0.25, 0, sx * 2]}>
+        <mesh key={i} position={[sx, 1.65, 0.42]} rotation={[-0.25, 0, sx * 2]}>
           <coneGeometry args={[0.07, 0.75, 5]} />
           <meshStandardMaterial
             color="#b0e8ff"
@@ -41,16 +62,13 @@ function PrismhoofMesh({ bob }: { bob: number }) {
           />
         </mesh>
       ))}
-      {[
-        [-0.18, 0.35, 0.3],
-        [0.18, 0.35, 0.3],
-        [-0.18, 0.35, -0.3],
-        [0.18, 0.35, -0.3],
-      ].map((p, i) => (
-        <mesh key={i} castShadow position={p as [number, number, number]}>
-          <cylinderGeometry args={[0.05, 0.06, 0.7, 5]} />
-          <meshStandardMaterial color="#b8a890" />
-        </mesh>
+      {PRISMHOOF_LEGS.map(([lx, lz], i) => (
+        <group key={i} name="leg" position={[lx, 0.7, lz]}>
+          <mesh castShadow position={[0, -0.35, 0]}>
+            <cylinderGeometry args={[0.05, 0.06, 0.7, 5]} />
+            <meshStandardMaterial color="#b8a890" />
+          </mesh>
+        </group>
       ))}
     </group>
   );
@@ -63,12 +81,12 @@ function ShadowfangMesh() {
         <capsuleGeometry args={[0.22, 0.7, 4, 8]} />
         <meshStandardMaterial color="#12141a" roughness={0.9} />
       </mesh>
-      <mesh castShadow position={[0, 0.62, -0.55]}>
+      <mesh castShadow position={[0, 0.62, 0.55]}>
         <sphereGeometry args={[0.2, 10, 10]} />
         <meshStandardMaterial color="#0e1016" />
       </mesh>
       {[-0.09, 0.09].map((sx, i) => (
-        <mesh key={i} position={[sx, 0.7, -0.7]}>
+        <mesh key={i} position={[sx, 0.7, 0.7]}>
           <sphereGeometry args={[0.045, 8, 8]} />
           <meshStandardMaterial
             color="#ff5500"
@@ -77,10 +95,18 @@ function ShadowfangMesh() {
           />
         </mesh>
       ))}
-      <mesh castShadow position={[0, 0.55, 0.65]} rotation={[0.5, 0, 0]}>
+      <mesh castShadow position={[0, 0.55, -0.65]} rotation={[-0.5, 0, 0]}>
         <coneGeometry args={[0.08, 0.45, 5]} />
         <meshStandardMaterial color="#0a0c10" />
       </mesh>
+      {SHADOWFANG_LEGS.map(([lx, lz], i) => (
+        <group key={i} name="leg" position={[lx, 0.5, lz]}>
+          <mesh castShadow position={[0, -0.25, 0]}>
+            <cylinderGeometry args={[0.045, 0.055, 0.5, 5]} />
+            <meshStandardMaterial color="#0e1016" roughness={0.9} />
+          </mesh>
+        </group>
+      ))}
     </group>
   );
 }
@@ -88,6 +114,7 @@ function ShadowfangMesh() {
 export function Creatures() {
   const groupRef = useRef<THREE.Group>(null);
   const agents = useRef<Agent[]>([]);
+  const rigs = useRef<Rig[]>([]);
   const count = useMemo(() => {
     const list: Agent[] = [];
     for (let i = 0; i < 6; i++) {
@@ -99,6 +126,7 @@ export function Creatures() {
         yaw: Math.random() * Math.PI * 2,
         kind: "prismhoof",
         phase: Math.random() * Math.PI * 2,
+        gait: Math.random() * Math.PI * 2,
         learnedBias: new THREE.Vector3(),
         health: 100,
         packRole: i,
@@ -111,6 +139,7 @@ export function Creatures() {
         yaw: 0,
         kind: "shadowfang",
         phase: Math.random() * 10,
+        gait: Math.random() * Math.PI * 2,
         learnedBias: new THREE.Vector3(),
         health: 100,
         packRole: i,
@@ -120,12 +149,22 @@ export function Creatures() {
     return list.length;
   }, []);
 
+  useLayoutEffect(() => {
+    const g = groupRef.current;
+    if (!g) return;
+    rigs.current = g.children.map((c) => {
+      const root = c.children[0] as THREE.Group;
+      return {
+        root,
+        legs: root.children.filter((o) => o.name === "leg") as THREE.Group[],
+      };
+    });
+  }, [count]);
+
   const lastPathLearn = useRef(0);
-  const bobPhase = useRef(0);
 
   useFrame((_, delta) => {
     const d = Math.min(delta, 0.05);
-    bobPhase.current += d;
     const store = useGameStore.getState();
     if (store.phase === "paused") return;
 
@@ -248,6 +287,20 @@ export function Creatures() {
         child.position.copy(a.pos);
         child.rotation.y = a.yaw;
       }
+
+      // Gait advances on the agent's own ground speed, so a grazing herd ambles
+      // and a closing pack sprints — without any of them re-rendering.
+      const spd = Math.hypot(a.vel.x, a.vel.z);
+      a.gait += d * (1.6 + spd * 2.2);
+      const rig = rigs.current[idx];
+      if (rig) {
+        const swing = Math.sin(a.gait) * Math.min(0.1 + spd * 0.16, 0.7);
+        rig.legs.forEach((leg, li) => {
+          leg.rotation.x = li === 0 || li === 3 ? swing : -swing;
+        });
+        rig.root.position.y =
+          Math.abs(Math.sin(a.gait)) * Math.min(spd / 5, 1) * 0.06;
+      }
     });
 
     store.setTracked(anyTrack);
@@ -255,18 +308,11 @@ export function Creatures() {
 
   return (
     <group ref={groupRef}>
-      {Array.from({ length: count }).map((_, i) => {
-        const kind = i < 6 ? "prismhoof" : "shadowfang";
-        return (
-          <group key={i}>
-            {kind === "prismhoof" ? (
-              <PrismhoofMesh bob={Math.sin(i + bobPhase.current * 3) * 0.03} />
-            ) : (
-              <ShadowfangMesh />
-            )}
-          </group>
-        );
-      })}
+      {Array.from({ length: count }).map((_, i) => (
+        <group key={i}>
+          {i < 6 ? <PrismhoofMesh /> : <ShadowfangMesh />}
+        </group>
+      ))}
     </group>
   );
 }

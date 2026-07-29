@@ -1,30 +1,10 @@
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { WORLD } from "@/game/data";
 import { useGameStore } from "@/game/store";
 import { sampleHeight } from "@/game/worldHeight";
-
-function Rock({ x, z, s }: { x: number; z: number; s: number }) {
-  const y = sampleHeight(x, z);
-  return (
-    <mesh
-      castShadow
-      receiveShadow
-      position={[x, y + s * 0.4, z]}
-      rotation={[0, x * 0.2, 0.05]}
-    >
-      <dodecahedronGeometry args={[s, 0]} />
-      <meshStandardMaterial
-        color="#2a2e34"
-        roughness={0.92}
-        metalness={0.08}
-        flatShading
-      />
-    </mesh>
-  );
-}
 
 function RidgeCache() {
   const looted = useGameStore((s) => s.cachesLooted.includes("cache-r"));
@@ -45,7 +25,7 @@ function RidgeCache() {
       <meshStandardMaterial
         color="#c45c2a"
         emissive="#c45c2a"
-        emissiveIntensity={0.4}
+        emissiveIntensity={1.4}
         metalness={0.4}
       />
     </mesh>
@@ -56,6 +36,8 @@ export function Ridge7() {
   const planted = useGameStore((s) => s.ridgeBeaconPlanted);
   const beacon = useRef<THREE.Group>(null);
   const pulse = useRef<THREE.MeshStandardMaterial>(null);
+  const rockRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
 
   const rocks = useMemo(() => {
     const out: { x: number; z: number; s: number }[] = [];
@@ -68,10 +50,24 @@ export function Ridge7() {
     return out;
   }, []);
 
+  useLayoutEffect(() => {
+    if (!rockRef.current) return;
+    rocks.forEach((r, i) => {
+      const y = sampleHeight(r.x, r.z);
+      dummy.position.set(r.x, y + r.s * 0.4, r.z);
+      dummy.rotation.set(0, r.x * 0.2, 0.05);
+      dummy.scale.setScalar(r.s);
+      dummy.updateMatrix();
+      rockRef.current!.setMatrixAt(i, dummy.matrix);
+    });
+    rockRef.current.instanceMatrix.needsUpdate = true;
+    rockRef.current.computeBoundingSphere();
+  }, [rocks, dummy]);
+
   useFrame(({ clock }) => {
     if (pulse.current) {
       pulse.current.emissiveIntensity =
-        0.6 + Math.sin(clock.elapsedTime * 2.5) * 0.5;
+        1.8 + Math.sin(clock.elapsedTime * 2.5) * 1.1;
     }
     if (beacon.current && planted) {
       beacon.current.rotation.y = clock.elapsedTime * 0.4;
@@ -93,9 +89,20 @@ export function Ridge7() {
 
   return (
     <group>
-      {rocks.map((r, i) => (
-        <Rock key={i} {...r} />
-      ))}
+      <instancedMesh
+        ref={rockRef}
+        args={[undefined, undefined, rocks.length]}
+        castShadow
+        receiveShadow
+      >
+        <dodecahedronGeometry args={[1, 0]} />
+        <meshStandardMaterial
+          color="#2a2e34"
+          roughness={0.92}
+          metalness={0.08}
+          flatShading
+        />
+      </instancedMesh>
 
       <mesh
         castShadow
@@ -112,21 +119,16 @@ export function Ridge7() {
           <cylinderGeometry args={[0.12, 0.18, 5, 8]} />
           <meshStandardMaterial color="#3a4550" metalness={0.5} />
         </mesh>
+        {/* Emissive only — Bloom carries the glow without a dynamic light. */}
         <mesh position={[0, 5.2, 0]}>
           <boxGeometry args={[0.8, 0.4, 0.8]} />
           <meshStandardMaterial
             ref={pulse}
             color={planted ? "#3d9e8f" : "#c45c2a"}
             emissive={planted ? "#3d9e8f" : "#c45c2a"}
-            emissiveIntensity={0.8}
+            emissiveIntensity={1.8}
           />
         </mesh>
-        <pointLight
-          position={[0, 5.5, 0]}
-          color={planted ? "#3d9e8f" : "#c45c2a"}
-          intensity={planted ? 8 : 4}
-          distance={20}
-        />
         <Html
           distanceFactor={30}
           position={[0, 6.5, 0]}
@@ -164,7 +166,7 @@ export function Ridge7() {
             <meshStandardMaterial
               color="#2a6b61"
               emissive="#3d9e8f"
-              emissiveIntensity={0.5}
+              emissiveIntensity={1.4}
             />
           </mesh>
         );

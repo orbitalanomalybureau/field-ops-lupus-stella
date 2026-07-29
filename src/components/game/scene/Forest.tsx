@@ -2,6 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { WORLD } from "@/game/data";
+import { useGameStore } from "@/game/store";
 import { sampleHeight } from "@/game/worldHeight";
 
 function seeded(seed: number) {
@@ -10,6 +11,14 @@ function seeded(seed: number) {
     s = (s * 16807) % 2147483647;
     return (s - 1) / 2147483646;
   };
+}
+
+/** 1 in deep night, 0 in full day, ramped across dawn and dusk. */
+function nightFactor(tod: number) {
+  const day =
+    THREE.MathUtils.smoothstep(tod, 0.16, 0.3) *
+    (1 - THREE.MathUtils.smoothstep(tod, 0.7, 0.84));
+  return 1 - day;
 }
 
 export function Forest() {
@@ -96,10 +105,12 @@ export function Forest() {
   }, [fernData, dummy]);
 
   useFrame(({ clock }) => {
+    if (!fernMat.current) return;
     const t = clock.elapsedTime;
     const pulse =
       0.5 + 0.5 * (0.5 + 0.5 * Math.sin((t * Math.PI * 2) / WORLD.fernPulse));
-    if (fernMat.current) fernMat.current.emissiveIntensity = pulse * 2.4;
+    const night = nightFactor(useGameStore.getState().timeOfDay);
+    fernMat.current.emissiveIntensity = pulse * (0.1 + night * 2.3);
   });
 
   const n = treeData.length;
@@ -134,7 +145,8 @@ export function Forest() {
         />
       </instancedMesh>
 
-      {/* Path beacons */}
+      {/* Path beacons. Emissive only — Bloom sells the glow, and seven always-on
+          dynamic lights was the scene's largest mobile-GPU cost for no gain. */}
       {[48, 62, 78, 95, 115, 135, 148].map((z, i) => {
         const x = 1.5 + (i % 2) * 3.5;
         const y = sampleHeight(x, z);
@@ -145,15 +157,21 @@ export function Forest() {
               <meshStandardMaterial
                 color="#2a6b61"
                 emissive="#3d9e8f"
-                emissiveIntensity={0.9}
+                emissiveIntensity={2.6}
+                toneMapped={false}
               />
             </mesh>
-            <pointLight
-              position={[0, 1.1, 0]}
-              color="#3d9e8f"
-              intensity={1.8}
-              distance={8}
-            />
+            {/* A dim halo disc so the beacon still reads at distance, where the
+                0.9-unit post falls below a pixel. */}
+            <mesh position={[0, 1.05, 0]}>
+              <sphereGeometry args={[0.22, 8, 6]} />
+              <meshBasicMaterial
+                color="#7fe8d8"
+                transparent
+                opacity={0.55}
+                toneMapped={false}
+              />
+            </mesh>
           </group>
         );
       })}

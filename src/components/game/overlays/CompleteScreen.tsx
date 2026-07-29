@@ -1,12 +1,22 @@
+import { useEffect, useState } from "react";
 import { useGameStore } from "@/game/store";
 
 export function CompleteScreen() {
-  const objectives = useGameStore((s) => s.objectives);
   const character = useGameStore((s) => s.getCharacter());
   const discoveries = useGameStore((s) => s.discoveries);
   const reset = useGameStore((s) => s.reset);
   const setPhase = useGameStore((s) => s.setPhase);
-  const done = objectives.filter((o) => o.done).length;
+  const total = useGameStore((s) => s.visibleObjectives().length);
+  const done = useGameStore(
+    (s) => s.visibleObjectives().filter((o) => o.done).length,
+  );
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 5000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-void px-4">
@@ -16,8 +26,7 @@ export function CompleteScreen() {
         </p>
         <h2 className="mt-3 text-2xl font-semibold text-fg">Field log sealed</h2>
         <p className="mt-2 text-sm text-muted">
-          {character?.name} · {done}/{objectives.length} objectives ·{" "}
-          {discoveries} codex
+          {character?.name} · {done}/{total} objectives · {discoveries} codex
         </p>
         <p className="mt-6 text-sm leading-relaxed text-muted">
           The survey mesh is archived to the Odyssey training database. Lupus
@@ -37,12 +46,21 @@ export function CompleteScreen() {
           </button>
           <button
             type="button"
-            onClick={reset}
-            className="min-h-11 rounded-md bg-primary px-5 py-2.5 text-sm font-semibold text-fg hover:bg-primary-glow"
+            onClick={() => (armed ? reset() : setArmed(true))}
+            className={`min-h-11 rounded-md px-5 py-2.5 font-semibold ${
+              armed
+                ? "border border-danger bg-danger/15 font-mono text-[11px] tracking-wide text-danger"
+                : "bg-primary text-sm text-fg hover:bg-primary-glow"
+            }`}
           >
-            New operative
+            {armed ? "CONFIRM — ERASES FIELD LOG" : "New operative"}
           </button>
         </div>
+        {armed && (
+          <p className="mt-3 font-mono text-[10px] text-dim">
+            ARMED · STANDS DOWN IN 5S · PROGRESS IS NOT RECOVERABLE
+          </p>
+        )}
       </div>
     </div>
   );

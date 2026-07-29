@@ -1,25 +1,55 @@
 {
+  "id": "/?source=pwa",
   "name": "Field Ops: Lupus Stella — 2121 EXODUS",
   "short_name": "Field Ops",
   "description": "Classified open-world survey of Lupus Stella from the 2121 EXODUS series.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
   "background_color": "#05060a",
   "theme_color": "#0a0c12",
   "orientation": "any",
+  "categories": ["games", "entertainment"],
   "lang": "en",
   "icons": [
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Perimeter walk",
+      "short_name": "Perimeter",
+      "description": "Deploy at the south gate and walk the light-tower line.",
+      "url": "/?spawn=south-gate"
+    },
+    {
+      "name": "Ridge-7 expedition",
+      "short_name": "Ridge-7",
+      "description": "Deploy on the western basalt spine.",
+      "url": "/?spawn=ridge7"
+    },
+    {
+      "name": "Treeline survey",
+      "short_name": "Treeline",
+      "description": "Deploy at the Titans treeline for the fern log.",
+      "url": "/?spawn=treeline"
     }
   ]
 }

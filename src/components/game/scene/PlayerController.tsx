@@ -10,6 +10,16 @@ import type { AnimState } from "@/game/types";
 
 type Keys = Set<string>;
 
+// Terrain.tsx builds one 480-unit plane centred on z=90; anything past its edge
+// is skybox void. The walk box is derived from that mesh so the two cannot
+// drift apart, and never exceeds the designed WORLD.bounds play area.
+const TERRAIN_SIZE = 480;
+const TERRAIN_CENTER_Z = 90;
+const TERRAIN_EDGE = TERRAIN_SIZE / 2 - 4;
+const WALK_MAX_X = Math.min(WORLD.bounds, TERRAIN_EDGE);
+const WALK_MIN_Z = Math.max(-40, TERRAIN_CENTER_Z - TERRAIN_EDGE);
+const WALK_MAX_Z = Math.min(WORLD.bounds + 40, TERRAIN_CENTER_Z + TERRAIN_EDGE);
+
 function getTouch() {
   return (
     window as unknown as {
@@ -198,9 +208,8 @@ export function PlayerController() {
     g.position.x += vel.current.x * d;
     g.position.z += vel.current.z * d;
 
-    const b = WORLD.bounds;
-    g.position.x = THREE.MathUtils.clamp(g.position.x, -b, b);
-    g.position.z = THREE.MathUtils.clamp(g.position.z, -40, b + 40);
+    g.position.x = THREE.MathUtils.clamp(g.position.x, -WALK_MAX_X, WALK_MAX_X);
+    g.position.z = THREE.MathUtils.clamp(g.position.z, WALK_MIN_Z, WALK_MAX_Z);
 
     // Soft clamp when inside dome
     if (inside) {

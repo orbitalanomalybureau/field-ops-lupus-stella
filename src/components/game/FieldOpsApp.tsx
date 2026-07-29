@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useGameStore } from "@/game/store";
+import type { GamePhase } from "@/game/types";
+import { onHostMessage, postToParent } from "@/lib/embed";
 import { BootScreen } from "./overlays/BootScreen";
 import { CharacterSelect } from "./overlays/CharacterSelect";
 import { Briefing } from "./overlays/Briefing";
@@ -18,12 +20,25 @@ type Props = {
   skipBoot?: boolean;
 };
 
+/** Phases that need the 3D chunk mounted. */
+const WORLD_PHASES: GamePhase[] = [
+  "playing",
+  "ruins",
+  "paused",
+  "dialogue",
+  "journal",
+  "photo",
+  "settings",
+];
+
 export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   const phase = useGameStore((s) => s.phase);
   const photoMode = useGameStore((s) => s.photoMode);
   const setPhase = useGameStore((s) => s.setPhase);
   const setEmbedMode = useGameStore((s) => s.setEmbedMode);
   const hydrate = useGameStore((s) => s.hydrate);
+  const initPreferences = useGameStore((s) => s.initPreferences);
+  const startAutosave = useGameStore((s) => s.startAutosave);
   const applyDeepLink = useGameStore((s) => s.applyDeepLink);
   const openJournal = useGameStore((s) => s.openJournal);
   const togglePhoto = useGameStore((s) => s.togglePhotoMode);
@@ -35,6 +50,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   useEffect(() => {
     setMounted(true);
     setEmbedMode(embed);
+    initPreferences();
     hydrate();
     try {
       const params = new URLSearchParams(window.location.search);
@@ -50,17 +66,20 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
       if (useGameStore.getState().phase === "boot") setPhase("select");
     }, 1400);
     return () => window.clearTimeout(t);
-  }, [setPhase, setEmbedMode, embed, skipBoot, hydrate, applyDeepLink]);
+  }, [
+    setPhase,
+    setEmbedMode,
+    embed,
+    skipBoot,
+    hydrate,
+    initPreferences,
+    applyDeepLink,
+  ]);
+
+  useEffect(() => startAutosave(), [startAutosave]);
 
   useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      if (!e.data || typeof e.data !== "object") return;
-      const msg = e.data as {
-        type?: string;
-        spoiler?: string;
-        spawn?: string;
-        operative?: string;
-      };
+    const unsubscribe = onHostMessage((msg) => {
       const s = useGameStore.getState();
       if (msg.type === "fieldops:pause") s.togglePause();
       if (msg.type === "fieldops:reset") s.reset();
@@ -71,24 +90,16 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
         if (msg.spoiler) p.set("spoiler", msg.spoiler);
         if (msg.spawn) p.set("spawn", msg.spawn);
         if (msg.operative) p.set("operative", msg.operative);
+        if (msg.chapter) p.set("chapter", msg.chapter);
         s.applyDeepLink(p);
       }
-    };
-    window.addEventListener("message", onMsg);
-    try {
-      window.parent?.postMessage({ type: "fieldops:ready", embed }, "*");
-    } catch {
-      /* ignore */
-    }
-    return () => window.removeEventListener("message", onMsg);
+    });
+    postToParent({ type: "fieldops:ready", embed });
+    return unsubscribe;
   }, [embed]);
 
   useEffect(() => {
-    try {
-      window.parent?.postMessage({ type: "fieldops:phase", phase }, "*");
-    } catch {
-      /* ignore */
-    }
+    postToParent({ type: "fieldops:phase", phase });
   }, [phase]);
 
   useEffect(() => {
@@ -121,16 +132,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   }, [openJournal, togglePhoto]);
 
   useEffect(() => {
-    const worldPhases = [
-      "playing",
-      "ruins",
-      "paused",
-      "dialogue",
-      "journal",
-      "photo",
-      "settings",
-    ];
-    if (!worldPhases.includes(phase)) return;
+    if (phase !== "briefing" && !WORLD_PHASES.includes(phase)) return;
     let cancelled = false;
     import("./scene/GameCanvas").then((mod) => {
       if (!cancelled) setGameCanvas(() => mod.GameCanvas);
@@ -148,15 +150,7 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
     );
   }
 
-  const inWorld = [
-    "playing",
-    "ruins",
-    "paused",
-    "dialogue",
-    "journal",
-    "photo",
-    "settings",
-  ].includes(phase);
+  const inWorld = WORLD_PHASES.includes(phase);
 
   const showHud =
     (phase === "playing" || phase === "ruins" || phase === "dialogue") &&
@@ -186,9 +180,18 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
         </>
       )}
       {phase === "photo" && (
-        <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-fg/70">
-          PHOTO MODE · P to exit
-        </div>
+        <>
+          <button
+            type="button"
+            onClick={togglePhoto}
+            className="absolute right-3 top-3 z-40 min-h-11 min-w-11 rounded-md border border-border bg-surface/70 px-3 font-mono text-[10px] tracking-[0.2em] text-muted backdrop-blur-sm hover:text-fg"
+          >
+            EXIT
+          </button>
+          <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 font-mono text-[10px] text-fg/70">
+            PHOTO MODE · P to exit
+          </div>
+        </>
       )}
       {phase === "paused" && <PauseMenu />}
       {phase === "dialogue" && <DialogueModal />}

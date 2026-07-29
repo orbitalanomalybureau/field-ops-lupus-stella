@@ -4,9 +4,11 @@ import {
   DIALOGUES,
   INITIAL_CODEX,
   INITIAL_OBJECTIVES,
+  MARKERS,
   NPCS,
   SPAWNS,
 } from "./data";
+import { postToParent } from "@/lib/embed";
 import type {
   AnimState,
   CharacterId,
@@ -19,9 +21,63 @@ import type {
   SpawnPoint,
   SpoilerCeiling,
   WeatherKind,
+  WorldMarker,
 } from "./types";
 
 const SAVE_KEY = "lupus-fieldops-v4";
+
+/** Bumped when the blob shape changes. Older blobs still load, best-effort. */
+export const SAVE_VERSION = 2;
+
+/** Keys from abandoned save schemas, swept on boot so they stop rotting. */
+const LEGACY_SAVE_KEYS = [
+  "lupus-fieldops-v1",
+  "lupus-fieldops-v2",
+  "lupus-fieldops-v3",
+];
+
+const AUTOSAVE_MS = 30000;
+
+/** The three staff the "npcs" objective names out loud. */
+const REQUIRED_NPCS = ["thornhill", "castillo", "voss"];
+
+const CACHE_MARKERS = MARKERS.filter((m) => m.kind === "cache");
+
+/** Dialogue hints that drop a real navigation pip, keyed to data.ts markers. */
+const HINT_MARKERS: Record<string, string> = {
+  "hint:ruins": "ruin",
+  "hint:ridge7": "ridge7",
+  "hint:coast": "coast",
+};
+
+type SaveBlob = {
+  version?: number;
+  updatedAt?: number;
+  characterId?: CharacterId | null;
+  objectives?: Objective[];
+  codex?: CodexEntry[];
+  scannedIds?: string[];
+  cachesLooted?: string[];
+  npcsTalked?: string[];
+  dynamicMarkers?: WorldMarker[];
+  ridgeBeaconPlanted?: boolean;
+  kaguyahimeLogged?: boolean;
+  domeEntered?: boolean;
+  ruinOpened?: boolean;
+  discoveries?: number;
+  health?: number;
+  stamina?: number;
+  stormSurvived?: boolean;
+  spoilerCeiling?: SpoilerCeiling;
+  journal?: JournalEntry[];
+  masterVolume?: number;
+  reducedMotion?: boolean;
+  playerPos?: { x: number; y: number; z: number };
+  playerYaw?: number;
+  timeOfDay?: number;
+  weather?: WeatherKind;
+  weatherIntensity?: number;
+};
 
 type GameStore = {
   phase: GamePhase;
@@ -64,12 +120,15 @@ type GameStore = {
   photoMode: boolean;
   insideDome: boolean;
   pendingSpawn: SpawnPoint | null;
+  dynamicMarkers: WorldMarker[];
+  hasSave: boolean;
   reducedMotion: boolean;
   masterVolume: number;
   setPhase: (p: GamePhase) => void;
   togglePause: () => void;
   selectCharacter: (id: CharacterId) => void;
   startMission: () => void;
+  resumeMission: () => void;
   completeObjective: (id: ObjectiveId) => void;
   unlockCodex: (id: string) => void;
   pushMessage: (msg: string) => void;
@@ -99,6 +158,7 @@ type GameStore = {
   chooseDialogue: (choiceIndex: number) => void;
   closeDialogue: () => void;
   applyDialogueEffect: (effect?: string) => void;
+  addDynamicMarker: (marker: WorldMarker) => void;
   openRuin: () => void;
   finishMission: () => void;
   setEmbedMode: (v: boolean) => void;
@@ -112,14 +172,72 @@ type GameStore = {
   applyDeepLink: (params: URLSearchParams) => void;
   exportJournal: () => string;
   setReducedMotion: (v: boolean) => void;
+  initPreferences: () => void;
   setMasterVolume: (v: number) => void;
   reset: () => void;
   persist: () => void;
+  startAutosave: () => () => void;
   hydrate: () => void;
   getCharacter: () => (typeof CHARACTERS)[number] | null;
   visibleObjectives: () => Objective[];
   visibleCodex: () => CodexEntry[];
 };
+
+function ceilingFilter<T extends { book2?: boolean }>(
+  items: T[],
+  ceiling: SpoilerCeiling,
+): T[] {
+  return items.filter((i) => !i.book2 || ceiling !== "book1");
+}
+
+/** Objective text names three sites; the forest holds two of the four drops. */
+function cachesRequired(ceiling: SpoilerCeiling): number {
+  return Math.max(1, ceilingFilter(CACHE_MARKERS, ceiling).length - 1);
+}
+
+function readSave(): SaveBlob | null {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? (JSON.parse(raw) as SaveBlob) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Saves store progress flags only; prose and spoiler tiers always come from
+ * data.ts, so new or reworded content reaches players who already have a save.
+ */
+function mergeObjectives(saved?: Objective[]): Objective[] {
+  const done = new Map(
+    (saved ?? []).map((o) => [o.id, Boolean(o.done)] as const),
+  );
+  return INITIAL_OBJECTIVES.map((o) => ({
+    ...o,
+    done: done.get(o.id) ?? o.done,
+  }));
+}
+
+function mergeCodex(saved?: CodexEntry[]): CodexEntry[] {
+  const unlocked = new Map(
+    (saved ?? []).map((c) => [c.id, Boolean(c.unlocked)] as const),
+  );
+  return INITIAL_CODEX.map((c) => ({
+    ...c,
+    unlocked: unlocked.get(c.id) ?? c.unlocked,
+  }));
+}
+
+function beginPlay(get: () => GameStore) {
+  get().persist();
+  if (typeof window !== "undefined") {
+    import("./audio").then(({ getAudio }) => {
+      getAudio().resume();
+      getAudio().setMasterVolume?.(get().masterVolume);
+    });
+  }
+  postToParent({ type: "fieldops:started", operative: get().characterId });
+}
 
 function applyEffect(get: () => GameStore, effect?: string) {
   if (!effect) return;
@@ -130,10 +248,17 @@ function applyEffect(get: () => GameStore, effect?: string) {
       get().setStamina(100);
       get().pushMessage("MED — stim administered");
     }
+    const markerId = HINT_MARKERS[part];
+    if (markerId) {
+      const marker = MARKERS.find((m) => m.id === markerId);
+      if (marker) get().addDynamicMarker(marker);
+    }
     if (part === "hint:ruins") get().pushMessage("NAV — south Titans marked");
-    if (part === "hint:ridge7") get().pushMessage("NAV — Ridge-7 west corridor open");
+    if (part === "hint:ridge7")
+      get().pushMessage("NAV — Ridge-7 west corridor open");
     if (part === "hint:storm") get().pushMessage("WX — ion cell expected");
-    if (part === "hint:coast") get().pushMessage("NAV — south coast memorial marked");
+    if (part === "hint:coast")
+      get().pushMessage("NAV — south coast memorial marked");
   }
 }
 
@@ -173,18 +298,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
   dialogueNpcId: null,
   dialogueNode: null,
   embedMode: false,
-  spoilerCeiling: "book2early",
+  spoilerCeiling: "book1",
   journal: [],
   photoMode: false,
   insideDome: false,
   pendingSpawn: null,
+  dynamicMarkers: [],
+  hasSave: false,
   reducedMotion: false,
   masterVolume: 0.7,
 
   setPhase: (phase) => set({ phase }),
   setEmbedMode: (embedMode) => set({ embedMode }),
   setSpoilerCeiling: (spoilerCeiling) => {
-    set({ spoilerCeiling });
+    set({
+      spoilerCeiling,
+      dynamicMarkers: ceilingFilter(get().dynamicMarkers, spoilerCeiling),
+    });
     get().pushMessage(
       spoilerCeiling === "book1"
         ? "SPOILER CEILING — BOOK I ONLY"
@@ -192,7 +322,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     );
     get().persist();
   },
-  setReducedMotion: (reducedMotion) => set({ reducedMotion }),
+  setReducedMotion: (reducedMotion) => {
+    set({ reducedMotion });
+    get().persist();
+  },
+  initPreferences: () => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    if (typeof readSave()?.reducedMotion === "boolean") return;
+    set({
+      reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
+        .matches,
+    });
+  },
   setMasterVolume: (masterVolume) => {
     set({ masterVolume: Math.max(0, Math.min(1, masterVolume)) });
     import("./audio").then(({ getAudio }) =>
@@ -230,18 +371,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
         : { x: 0, y: 0, z: 40 },
       playerYaw: spawn?.yaw ?? Math.PI,
     });
-    get().persist();
-    if (typeof window !== "undefined") {
-      import("./audio").then(({ getAudio }) => {
-        getAudio().resume();
-        getAudio().setMasterVolume?.(get().masterVolume);
-      });
-    }
-    try {
-      window.parent?.postMessage({ type: "fieldops:started" }, "*");
-    } catch {
-      /* ignore */
-    }
+    beginPlay(get);
+  },
+
+  resumeMission: () => {
+    set({
+      phase: "playing",
+      messages: [
+        "FIELD OPS ONLINE — FIELD LOG RESTORED",
+        "J journal · P photo · Esc menu · position held",
+      ],
+    });
+    beginPlay(get);
   },
 
   completeObjective: (id) => {
@@ -307,7 +448,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().pushMessage(`CACHE RECOVERED — ${id.toUpperCase()}`);
     get().setHealth(Math.min(100, get().health + 12));
     get().setStamina(100);
-    if (cachesLooted.length >= 2) get().completeObjective("caches");
+    if (cachesLooted.length >= cachesRequired(get().spoilerCeiling))
+      get().completeObjective("caches");
     get().persist();
   },
 
@@ -400,12 +542,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!get().npcsTalked.includes(npcId)) {
       const npcsTalked = [...get().npcsTalked, npcId];
       set({ npcsTalked });
-      if (npcsTalked.filter((id) => id !== "tomas").length >= 3)
+      if (REQUIRED_NPCS.every((id) => npcsTalked.includes(id)))
         get().completeObjective("npcs");
     }
-    if (npcId === "theo" || get().characterId === "theo") {
-      get().unlockCodex("ava");
-    }
+    if (get().characterId === "theo") get().unlockCodex("ava");
     if (typeof document !== "undefined" && document.pointerLockElement) {
       document.exitPointerLock();
     }
@@ -445,6 +585,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   applyDialogueEffect: (effect) => applyEffect(get, effect),
 
+  addDynamicMarker: (marker) => {
+    if (marker.book2 && get().spoilerCeiling === "book1") return;
+    if (get().dynamicMarkers.some((m) => m.id === marker.id)) return;
+    set({ dynamicMarkers: [...get().dynamicMarkers, { ...marker }] });
+    get().persist();
+  },
+
   openRuin: () => {
     set({ ruinOpened: true, phase: "ruins" });
     get().completeObjective("ruins");
@@ -459,11 +606,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ phase: "complete" });
     get().pushMessage("LOG SEALED — REMEMBER");
     get().persist();
-    try {
-      window.parent?.postMessage({ type: "fieldops:complete" }, "*");
-    } catch {
-      /* ignore */
-    }
+    const visible = get().visibleObjectives();
+    postToParent({
+      type: "fieldops:complete",
+      ending: "silent",
+      objectives: visible.filter((o) => o.done).length,
+      total: visible.length,
+      discoveries: get().discoveries,
+    });
   },
 
   addJournal: (title, body) => {
@@ -479,6 +629,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const journal = [entry, ...get().journal].slice(0, 40);
     set({ journal });
     if (journal.length >= 3) get().completeObjective("journal3");
+    get().persist();
   },
 
   openJournal: () => {
@@ -522,7 +673,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   applyDeepLink: (params) => {
     const spoiler = params.get("spoiler");
     if (spoiler === "book1" || spoiler === "book2early") {
-      set({ spoilerCeiling: spoiler });
+      set({
+        spoilerCeiling: spoiler,
+        dynamicMarkers: ceilingFilter(get().dynamicMarkers, spoiler),
+      });
     }
     const spawn = params.get("spawn") as SpawnPoint | null;
     if (spawn && SPAWNS[spawn]) set({ pendingSpawn: spawn });
@@ -593,6 +747,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       photoMode: false,
       insideDome: false,
       pendingSpawn: null,
+      dynamicMarkers: [],
+      hasSave: false,
     });
     try {
       localStorage.removeItem(SAVE_KEY);
@@ -607,49 +763,99 @@ export const useGameStore = create<GameStore>((set, get) => ({
       localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({
+          version: SAVE_VERSION,
+          updatedAt: Date.now(),
           characterId: s.characterId,
           objectives: s.objectives,
           codex: s.codex,
           scannedIds: s.scannedIds,
           cachesLooted: s.cachesLooted,
           npcsTalked: s.npcsTalked,
+          dynamicMarkers: s.dynamicMarkers,
           ridgeBeaconPlanted: s.ridgeBeaconPlanted,
           kaguyahimeLogged: s.kaguyahimeLogged,
           domeEntered: s.domeEntered,
+          ruinOpened: s.ruinOpened,
           discoveries: s.discoveries,
           health: s.health,
+          stamina: s.stamina,
           stormSurvived: s.stormSurvived,
           spoilerCeiling: s.spoilerCeiling,
           journal: s.journal,
           masterVolume: s.masterVolume,
-        }),
+          reducedMotion: s.reducedMotion,
+          playerPos: s.playerPos,
+          playerYaw: s.playerYaw,
+          timeOfDay: s.timeOfDay,
+          weather: s.weather,
+          weatherIntensity: s.weatherIntensity,
+        } satisfies SaveBlob),
       );
     } catch {
       /* ignore */
     }
   },
 
+  startAutosave: () => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return () => {};
+    }
+    const flush = () => get().persist();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    const timer = window.setInterval(() => {
+      const phase = get().phase;
+      if (phase === "playing" || phase === "ruins") flush();
+    }, AUTOSAVE_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+    };
+  },
+
   hydrate: () => {
     try {
-      const raw = localStorage.getItem(SAVE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw) as Partial<GameStore>;
+      for (const key of LEGACY_SAVE_KEYS) localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const data = readSave();
+      if (!data) return;
+      const spoilerCeiling = data.spoilerCeiling ?? "book1";
       set({
         characterId: data.characterId ?? null,
-        objectives: data.objectives ?? get().objectives,
-        codex: data.codex ?? get().codex,
+        objectives: mergeObjectives(data.objectives),
+        codex: mergeCodex(data.codex),
         scannedIds: data.scannedIds ?? [],
         cachesLooted: data.cachesLooted ?? [],
         npcsTalked: data.npcsTalked ?? [],
+        dynamicMarkers: ceilingFilter(
+          data.dynamicMarkers ?? [],
+          spoilerCeiling,
+        ),
         ridgeBeaconPlanted: data.ridgeBeaconPlanted ?? false,
         kaguyahimeLogged: data.kaguyahimeLogged ?? false,
         domeEntered: data.domeEntered ?? false,
+        ruinOpened: data.ruinOpened ?? false,
         discoveries: data.discoveries ?? 0,
         health: data.health ?? 100,
+        stamina: data.stamina ?? 100,
         stormSurvived: data.stormSurvived ?? false,
-        spoilerCeiling: data.spoilerCeiling ?? "book2early",
+        spoilerCeiling,
         journal: data.journal ?? [],
         masterVolume: data.masterVolume ?? 0.7,
+        reducedMotion: data.reducedMotion ?? get().reducedMotion,
+        playerPos: data.playerPos ?? get().playerPos,
+        playerYaw: data.playerYaw ?? get().playerYaw,
+        timeOfDay: data.timeOfDay ?? get().timeOfDay,
+        weather: data.weather ?? get().weather,
+        weatherIntensity: data.weatherIntensity ?? get().weatherIntensity,
+        hasSave: Boolean(data.characterId),
       });
     } catch {
       /* ignore */
@@ -661,13 +867,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return CHARACTERS.find((c) => c.id === id) ?? null;
   },
 
-  visibleObjectives: () => {
-    const ceil = get().spoilerCeiling;
-    return get().objectives.filter((o) => !o.book2 || ceil !== "book1");
-  },
+  visibleObjectives: () => ceilingFilter(get().objectives, get().spoilerCeiling),
 
-  visibleCodex: () => {
-    const ceil = get().spoilerCeiling;
-    return get().codex.filter((c) => !c.book2 || ceil !== "book1");
-  },
+  visibleCodex: () => ceilingFilter(get().codex, get().spoilerCeiling),
 }));

@@ -10,10 +10,6 @@ import { sampleHeight } from "@/game/worldHeight";
 export function KaguyahimeCoast() {
   const spoiler = useGameStore((s) => s.spoilerCeiling);
   const logged = useGameStore((s) => s.kaguyahimeLogged);
-  if (spoiler === "book1") return null;
-
-  const [mx, , mz] = WORLD.coastMemorial;
-  const y = sampleHeight(mx, mz);
   const glow = useRef<THREE.MeshStandardMaterial>(null);
   const cherry = useRef<THREE.Group>(null);
 
@@ -26,6 +22,11 @@ export function KaguyahimeCoast() {
       cherry.current.rotation.y = Math.sin(clock.elapsedTime * 0.3) * 0.05;
     }
   });
+
+  if (spoiler === "book1") return null;
+
+  const [mx, , mz] = WORLD.coastMemorial;
+  const y = sampleHeight(mx, mz);
 
   return (
     <group>

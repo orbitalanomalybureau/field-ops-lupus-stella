@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { sampleHeight } from "@/game/worldHeight";
 
@@ -6,10 +6,13 @@ function Dome({ position }: { position: [number, number, number] }) {
   const y = sampleHeight(position[0], position[2]);
   return (
     <group position={[position[0], y, position[2]]}>
+      {/* Interior warm glow is emissive, not a dynamic light */}
       <mesh castShadow receiveShadow position={[0, 2.3, 0]}>
         <sphereGeometry args={[4.3, 28, 18, 0, Math.PI * 2, 0, Math.PI / 2]} />
         <meshPhysicalMaterial
           color="#3a4656"
+          emissive="#ffc090"
+          emissiveIntensity={0.25}
           roughness={0.35}
           metalness={0.45}
           transparent
@@ -22,8 +25,6 @@ function Dome({ position }: { position: [number, number, number] }) {
         <cylinderGeometry args={[4.4, 4.6, 0.28, 28]} />
         <meshStandardMaterial color="#2a3038" metalness={0.45} roughness={0.55} />
       </mesh>
-      {/* Interior warm glow */}
-      <pointLight position={[0, 2, 0]} color="#ffc090" intensity={4} distance={10} />
     </group>
   );
 }
@@ -41,7 +42,7 @@ function Generator({ position }: { position: [number, number, number] }) {
         <meshStandardMaterial
           color="#3d9e8f"
           emissive="#3d9e8f"
-          emissiveIntensity={0.85}
+          emissiveIntensity={1.8}
           metalness={0.65}
           roughness={0.25}
         />
@@ -50,12 +51,17 @@ function Generator({ position }: { position: [number, number, number] }) {
         <cylinderGeometry args={[1.6, 1.7, 0.25, 14]} />
         <meshStandardMaterial color="#1e242c" metalness={0.5} />
       </mesh>
-      <pointLight position={[0, 3.2, 0]} color="#3d9e8f" intensity={4} distance={14} />
     </group>
   );
 }
 
-function LightTower({ position }: { position: [number, number, number] }) {
+function LightTower({
+  position,
+  shadow = false,
+}: {
+  position: [number, number, number];
+  shadow?: boolean;
+}) {
   const y = sampleHeight(position[0], position[2]);
   return (
     <group position={[position[0], y, position[2]]}>
@@ -78,13 +84,16 @@ function LightTower({ position }: { position: [number, number, number] }) {
         intensity={55}
         distance={55}
         color="#ffe0b0"
-        castShadow
+        castShadow={shadow}
       />
     </group>
   );
 }
 
 export function Colony() {
+  const fenceRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
   const fencePosts = useMemo(() => {
     const posts: [number, number, number][] = [];
     for (let i = 0; i < 56; i++) {
@@ -96,6 +105,17 @@ export function Colony() {
     }
     return posts;
   }, []);
+
+  useLayoutEffect(() => {
+    if (!fenceRef.current) return;
+    fencePosts.forEach((p, i) => {
+      dummy.position.set(p[0], p[1] + 1.1, p[2]);
+      dummy.updateMatrix();
+      fenceRef.current!.setMatrixAt(i, dummy.matrix);
+    });
+    fenceRef.current.instanceMatrix.needsUpdate = true;
+    fenceRef.current.computeBoundingSphere();
+  }, [fencePosts, dummy]);
 
   return (
     <group>
@@ -110,8 +130,10 @@ export function Colony() {
       <Generator position={[-12, 0, -8]} />
       <Generator position={[16, 0, -6]} />
 
-      <LightTower position={[-35, 0, 35]} />
-      <LightTower position={[35, 0, 35]} />
+      {/* Only the southern pair rakes shadows across the dome cluster; three
+          shadow maps for the same set piece is not worth the fill cost. */}
+      <LightTower position={[-35, 0, 35]} shadow />
+      <LightTower position={[35, 0, 35]} shadow />
       <LightTower position={[0, 0, 42]} />
       <LightTower position={[-28, 0, -5]} />
       <LightTower position={[28, 0, -5]} />
@@ -163,12 +185,14 @@ export function Colony() {
         />
       </mesh>
 
-      {fencePosts.map((p, i) => (
-        <mesh key={i} castShadow position={[p[0], p[1] + 1.1, p[2]]}>
-          <cylinderGeometry args={[0.07, 0.09, 2.2, 6]} />
-          <meshStandardMaterial color="#3a424a" metalness={0.35} />
-        </mesh>
-      ))}
+      <instancedMesh
+        ref={fenceRef}
+        args={[undefined, undefined, fencePosts.length]}
+        castShadow
+      >
+        <cylinderGeometry args={[0.07, 0.09, 2.2, 6]} />
+        <meshStandardMaterial color="#3a424a" metalness={0.35} />
+      </instancedMesh>
 
       {[
         [-6, 12],

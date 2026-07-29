@@ -103,7 +103,9 @@ export function getAudio(): AudioApi {
       if (ctx.state === "suspended") void ctx.resume();
     },
     setMasterVolume: (v) => {
-      master.gain.setTargetAtTime(0.05 + v * 0.35, ctx.currentTime, 0.05);
+      // 0 must be true silence — the old 0.05 floor made mute impossible.
+      const gain = v <= 0 ? 0 : 0.05 + v * 0.35;
+      master.gain.setTargetAtTime(gain, ctx.currentTime, 0.05);
     },
     setOutdoor: (v) => {
       windGain.gain.setTargetAtTime(0.25 + v * 0.25, ctx.currentTime, 0.4);

@@ -1,21 +1,29 @@
 import { useEffect, useState } from "react";
 import { getAudio } from "@/game/audio";
+import { useGameStore } from "@/game/store";
 
 export function ClickToPlay() {
   const [show, setShow] = useState(true);
 
   useEffect(() => {
-    const hide = () => {
-      setShow(false);
-      getAudio().resume();
+    const onLockChange = () => {
+      if (document.pointerLockElement) {
+        setShow(false);
+        getAudio().resume();
+        return;
+      }
+      // Esc drops pointer lock without changing phase — without this the hint
+      // never returns and the player has no way to learn how to re-acquire it.
+      if (useGameStore.getState().phase === "playing") setShow(true);
     };
-    document.addEventListener("pointerlockchange", () => {
-      if (document.pointerLockElement) hide();
-    });
+    document.addEventListener("pointerlockchange", onLockChange);
     const t = window.setTimeout(() => {
       if (matchMedia("(pointer: coarse)").matches) setShow(false);
     }, 5000);
-    return () => window.clearTimeout(t);
+    return () => {
+      document.removeEventListener("pointerlockchange", onLockChange);
+      window.clearTimeout(t);
+    };
   }, []);
 
   if (!show) return null;

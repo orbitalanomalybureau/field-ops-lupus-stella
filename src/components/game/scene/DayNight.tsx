@@ -19,6 +19,7 @@ export function DayNight() {
   const bgColor = useMemo(() => new THREE.Color("#2a1812"), []);
   const tmpA = useMemo(() => new THREE.Color(), []);
   const tmpB = useMemo(() => new THREE.Color(), []);
+  const sunDir = useMemo(() => new THREE.Vector3(), []);
   const todPublish = useRef(0);
 
   const starPos = useMemo(() => {
@@ -61,7 +62,18 @@ export function DayNight() {
     const sunZ = Math.sin(tod * Math.PI * 2) * 40 - 20;
 
     if (sun.current) {
-      sun.current.position.set(sunX, sunY, sunZ);
+      // The shadow box is only ±60, so it rides the player instead of the
+      // origin; the default light target is outside the scene graph, hence
+      // the manual matrix update.
+      const p = useGameStore.getState().playerPos;
+      sunDir.set(sunX, sunY, sunZ).normalize();
+      sun.current.position.set(
+        p.x + sunDir.x * 90,
+        p.y + sunDir.y * 90,
+        p.z + sunDir.z * 90,
+      );
+      sun.current.target.position.set(p.x, p.y, p.z);
+      sun.current.target.updateMatrixWorld();
       let intensity = 0.15 + dayFactor * 1.75;
       if (weather === "storm") intensity *= 0.35;
       else if (weather === "rain") intensity *= 0.55;
@@ -161,11 +173,12 @@ export function DayNight() {
         intensity={1.6}
         color="#ffb070"
         shadow-mapSize={[2048, 2048]}
-        shadow-camera-far={280}
-        shadow-camera-left={-120}
-        shadow-camera-right={120}
-        shadow-camera-top={120}
-        shadow-camera-bottom={-120}
+        shadow-camera-near={5}
+        shadow-camera-far={220}
+        shadow-camera-left={-60}
+        shadow-camera-right={60}
+        shadow-camera-top={60}
+        shadow-camera-bottom={-60}
         shadow-bias={-0.00025}
         position={[55, 72, -25]}
       />

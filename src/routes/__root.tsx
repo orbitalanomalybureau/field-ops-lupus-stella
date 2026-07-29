@@ -1,11 +1,13 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { useEffect } from "react";
 import appCss from "../styles.css?url";
+import { RouteErrorFault } from "@/components/ui/WorldErrorBoundary";
 
 const FONT_HREF =
   "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap";
 
 export const Route = createRootRoute({
+  errorComponent: ({ error }) => <RouteErrorFault error={error} />,
   head: () => ({
     meta: [
       { charSet: "utf-8" },

@@ -209,3 +209,45 @@ test.describe("progression", () => {
     expect(text).toMatch(/DANIEL|RESUME|Theo/i);
   });
 });
+
+test.describe("resilience", () => {
+  // The reported crash: selecting Theo threw "Cannot read properties of null
+  // (reading 'useMemo')" — a duplicate-React / stale-module fault. This is the
+  // faithful regression: click each operative card (not the deep link, which
+  // bypasses the select handler) with a save on disk, and assert no page error
+  // and that the world reaches the canvas.
+  for (const op of [
+    { name: /Theo/i, callsign: "DANIEL" },
+    { name: /Carrera/i, callsign: "SURVEY-3" },
+  ]) {
+    test(`selecting ${op.callsign} with a save on disk does not crash`, async ({
+      page,
+    }) => {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (e) => pageErrors.push(e.message));
+
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => {
+        localStorage.setItem(
+          "lupus-fieldops-v4",
+          JSON.stringify({
+            version: 5,
+            characterId: "marine",
+            discoveries: 5,
+            playerPos: { x: 0, y: 0, z: 70 },
+          }),
+        );
+      });
+      await page.reload({ waitUntil: "domcontentloaded" });
+
+      await page.getByRole("button", { name: op.name }).first().click();
+      await page.getByRole("button", { name: /Deploy to surface/i }).click();
+      await expect(page.locator("canvas")).toBeVisible({ timeout: 30_000 });
+
+      expect(
+        pageErrors,
+        `no crash on select: ${pageErrors.join(" | ")}`,
+      ).toEqual([]);
+    });
+  }
+});

@@ -18,6 +18,7 @@ import { DialogueModal } from "./overlays/DialogueModal";
 import { JournalPanel } from "./overlays/JournalPanel";
 import { SettingsPanel } from "./overlays/SettingsPanel";
 import { KeybindOverlay, Tutorial } from "./overlays/Tutorial";
+import { WorldErrorBoundary } from "@/components/ui/WorldErrorBoundary";
 
 type Props = {
   embed?: boolean;
@@ -35,7 +36,18 @@ const WORLD_PHASES: GamePhase[] = [
   "settings",
 ];
 
-export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
+export function FieldOpsApp(props: Props) {
+  // The boundary sits above the component that throws: chunk-load failures
+  // surface via the canvasError re-throw inside, and render crashes anywhere
+  // in the world tree land here instead of on a dead black screen.
+  return (
+    <WorldErrorBoundary>
+      <FieldOpsAppInner {...props} />
+    </WorldErrorBoundary>
+  );
+}
+
+function FieldOpsAppInner({ embed = false, skipBoot = false }: Props) {
   const phase = useGameStore((s) => s.phase);
   const photoMode = useGameStore((s) => s.photoMode);
   const reducedMotion = useGameStore((s) => s.reducedMotion);
@@ -51,6 +63,8 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   const [inserting, setInserting] = useState(false);
   const insertionSpent = useRef(false);
   const [GameCanvas, setGameCanvas] = useState<null | React.ComponentType>(null);
+  const [canvasError, setCanvasError] = useState<Error | null>(null);
+  if (canvasError) throw canvasError;
 
   useEffect(() => {
     setMounted(true);
@@ -169,9 +183,26 @@ export function FieldOpsApp({ embed = false, skipBoot = false }: Props) {
   useEffect(() => {
     if (phase !== "briefing" && !WORLD_PHASES.includes(phase)) return;
     let cancelled = false;
-    import("./scene/GameCanvas").then((mod) => {
-      if (!cancelled) setGameCanvas(() => mod.GameCanvas);
-    });
+    // One retry, then surface the failure. Without the catch, a tab left open
+    // across a redeploy 404s the old hashed chunk and the world simply never
+    // arrives — a silent black screen with a working HUD.
+    const load = (attempt: number) => {
+      import("./scene/GameCanvas")
+        .then((mod) => {
+          if (!cancelled) setGameCanvas(() => mod.GameCanvas);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (attempt < 1) {
+            window.setTimeout(() => load(attempt + 1), 1200);
+            return;
+          }
+          setCanvasError(
+            err instanceof Error ? err : new Error("world chunk failed to load"),
+          );
+        });
+    };
+    load(0);
     return () => {
       cancelled = true;
     };

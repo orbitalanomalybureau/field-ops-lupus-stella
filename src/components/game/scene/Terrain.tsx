@@ -76,8 +76,9 @@ type GroundSpec = {
   blotch?: { count: number; rgb: [number, number, number]; radius: number; alpha: number };
 };
 
-function groundTexture(spec: GroundSpec, seed: number): THREE.CanvasTexture {
-  const size = spec.size;
+/** `mul` scales the canvas edge; counts and radii follow so density is constant. */
+function groundTexture(spec: GroundSpec, seed: number, mul: number): THREE.CanvasTexture {
+  const size = spec.size * mul;
   const c = document.createElement("canvas");
   c.width = size;
   c.height = size;
@@ -89,10 +90,35 @@ function groundTexture(spec: GroundSpec, seed: number): THREE.CanvasTexture {
   ctx.fillRect(0, 0, size, size);
 
   const rand = seeded(seed);
+
+  // Metre-scale wash under the grain: a dozen huge, faint ellipses in the
+  // palette's own light and dark tones. Without low-frequency variance the
+  // surface only varies at centimetre scale and reads as speckle from eye
+  // height. Each ellipse is stamped at the 3x3 wrap offsets so the 9 m repeat
+  // cannot cut one at the canvas edge and print a seam line on the ground.
+  const dark = spec.blotch?.rgb ?? [0, 0, 0];
+  for (let i = 0; i < 12; i++) {
+    const rgb = i % 2 === 0 ? spec.grain.rgb : dark;
+    const rx = size * (0.14 + rand() * 0.22);
+    const ry = size * (0.1 + rand() * 0.2);
+    const x = rand() * size;
+    const y = rand() * size;
+    const a = rand() * Math.PI;
+    ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.04 + rand() * 0.07).toFixed(3)})`;
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        ctx.beginPath();
+        ctx.ellipse(x + ox * size, y + oy * size, rx, ry, a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  const area = mul * mul;
   const blotch = spec.blotch;
   if (blotch) {
-    for (let i = 0; i < blotch.count; i++) {
-      const r = blotch.radius * (0.4 + rand() * 1.3);
+    for (let i = 0; i < blotch.count * area; i++) {
+      const r = blotch.radius * mul * (0.4 + rand() * 1.3);
       ctx.fillStyle = `rgba(${blotch.rgb[0]},${blotch.rgb[1]},${blotch.rgb[2]},${(
         blotch.alpha * rand()
       ).toFixed(3)})`;
@@ -111,12 +137,20 @@ function groundTexture(spec: GroundSpec, seed: number): THREE.CanvasTexture {
   }
 
   const grain = spec.grain;
-  for (let i = 0; i < grain.count; i++) {
+  // Doubling the canvas quadruples the speck count, so each speck must fade by
+  // roughly the same ratio or the ground gets busier instead of finer.
+  const soft = mul > 1 ? 0.62 : 1;
+  for (let i = 0; i < grain.count * area; i++) {
     const v = 1 - grain.vary * rand();
     ctx.fillStyle = `rgba(${(grain.rgb[0] * v) | 0},${(grain.rgb[1] * v) | 0},${
       (grain.rgb[2] * v) | 0
-    },${(0.15 + rand() * 0.5).toFixed(3)})`;
-    ctx.fillRect(rand() * size, rand() * size, 1 + rand() * grain.max, 1 + rand() * grain.max);
+    },${((0.15 + rand() * 0.5) * soft).toFixed(3)})`;
+    ctx.fillRect(
+      rand() * size,
+      rand() * size,
+      (1 + rand() * grain.max) * mul,
+      (1 + rand() * grain.max) * mul,
+    );
   }
 
   const tex = new THREE.CanvasTexture(c);
@@ -131,8 +165,12 @@ function groundTexture(spec: GroundSpec, seed: number): THREE.CanvasTexture {
  * Four surfaces, blended in the shader. The palettes stay in the range of the
  * single texture they replace, because the material colour that multiplies them
  * is unchanged and the whole scene's exposure was lit against it.
+ *
+ * `mul` 2 (medium/high) doubles every canvas — soil/moss 512->1024, rock/sand
+ * 256->512, ~13 MB of texture with mips versus ~3.3 MB at `mul` 1. Texture
+ * bandwidth is exactly what the low tier is short of, so it keeps `mul` 1.
  */
-function groundTextures() {
+function groundTextures(mul: number) {
   return {
     soil: groundTexture(
       {
@@ -143,6 +181,7 @@ function groundTextures() {
         blotch: { count: 40, rgb: [26, 22, 16], radius: 44, alpha: 0.35 },
       },
       1013,
+      mul,
     ),
     moss: groundTexture(
       {
@@ -153,6 +192,7 @@ function groundTextures() {
         blotch: { count: 70, rgb: [30, 74, 52], radius: 38, alpha: 0.4 },
       },
       2029,
+      mul,
     ),
     rock: groundTexture(
       {
@@ -163,6 +203,7 @@ function groundTextures() {
         blotch: { count: 34, rgb: [42, 40, 38], radius: 26, alpha: 0.5 },
       },
       3049,
+      mul,
     ),
     sand: groundTexture(
       {
@@ -173,8 +214,63 @@ function groundTextures() {
         blotch: { count: 22, rgb: [92, 76, 60], radius: 22, alpha: 0.3 },
       },
       4073,
+      mul,
     ),
   };
+}
+
+/**
+ * One shared fine-detail bump, tiled at a third of the 9 m splat repeat so the
+ * relief never phase-locks with the colour. Two octaves of periodic value
+ * noise on wrapped lattices, so the texture tiles seamlessly by construction;
+ * R8 keeps the whole thing at 64 KB. Colour still sells the surface — the bump
+ * only has to catch raking dawn/dusk light.
+ */
+function detailBumpTexture(): THREE.DataTexture {
+  const size = 256;
+  const rand = seeded(6151);
+  const lattice = (n: number): Float32Array => {
+    const a = new Float32Array(n * n);
+    for (let i = 0; i < a.length; i++) a[i] = rand();
+    return a;
+  };
+  const coarse = lattice(8);
+  const fine = lattice(32);
+  const sample = (a: Float32Array, n: number, u: number, v: number): number => {
+    const x = u * n;
+    const y = v * n;
+    const x0 = Math.floor(x) % n;
+    const y0 = Math.floor(y) % n;
+    const x1 = (x0 + 1) % n;
+    const y1 = (y0 + 1) % n;
+    let fx = x - Math.floor(x);
+    let fy = y - Math.floor(y);
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    const top = a[y0 * n + x0] * (1 - fx) + a[y0 * n + x1] * fx;
+    const bottom = a[y1 * n + x0] * (1 - fx) + a[y1 * n + x1] * fx;
+    return top * (1 - fy) + bottom * fy;
+  };
+  const data = new Uint8Array(size * size);
+  for (let j = 0; j < size; j++) {
+    const v = (j + 0.5) / size;
+    for (let i = 0; i < size; i++) {
+      const u = (i + 0.5) / size;
+      const h = 0.68 * sample(coarse, 8, u, v) + 0.32 * sample(fine, 32, u, v);
+      data[j * size + i] = Math.round(h * 255);
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  // r185 gives every map its own transform uniform, so the bump can tile finer
+  // than the splats without touching their world-space UV maths.
+  tex.repeat.set(3, 3);
+  tex.needsUpdate = true;
+  return tex;
 }
 
 type Uniforms = {
@@ -243,16 +339,20 @@ float groundNoise( vec2 p ) {
  * little of every other one, and the whole world picks up a wash of beach sand.
  * Two value-noise taps and four texture fetches: cheap enough for the phone,
  * and it is what stops the ground reading as one tiled swatch from pad to coast.
+ *
+ * The bands are ~0.1 wider than Phase 3 shipped: a transition now covers a few
+ * metres instead of one, which is how ground actually shades between surfaces.
+ * The noise stays inside the smoothstep for the reason above.
  */
 const FRAGMENT_BODY = /* glsl */ `
 #include <color_fragment>
 vec2 groundUv = vGroundWorld.xz * uTexScale;
 float edge = groundNoise( vGroundWorld.xz * 0.11 ) - 0.5;
 float rock = max(
-  smoothstep( 0.32, 0.60, vGroundSlope + edge * 0.22 ),
-  smoothstep( 0.30, 0.62, vGroundBiome.y + edge * 0.30 ) );
-float sand = smoothstep( 0.34, 0.66, vGroundBiome.z + edge * 0.30 );
-float soil = smoothstep( 0.30, 0.62, vGroundBiome.x + edge * 0.26 );
+  smoothstep( 0.28, 0.66, vGroundSlope + edge * 0.22 ),
+  smoothstep( 0.26, 0.68, vGroundBiome.y + edge * 0.30 ) );
+float sand = smoothstep( 0.30, 0.72, vGroundBiome.z + edge * 0.30 );
+float soil = smoothstep( 0.26, 0.68, vGroundBiome.x + edge * 0.26 );
 vec3 ground = texture2D( uMoss, groundUv ).rgb;
 ground = mix( ground, texture2D( uSand, groundUv ).rgb, sand );
 ground = mix( ground, texture2D( uSoil, groundUv ).rgb, soil );
@@ -262,11 +362,19 @@ ground *= mix( uNightTint, vec3( 1.0 ), uDay );
 diffuseColor.rgb *= ground;
 `;
 
-function terrainMaterial(uniforms: Uniforms): THREE.MeshStandardMaterial {
+function terrainMaterial(
+  uniforms: Uniforms,
+  bump: THREE.Texture | null,
+): THREE.MeshStandardMaterial {
   const material = new THREE.MeshStandardMaterial({
     color: "#9a8068",
     roughness: 0.94,
     metalness: 0.04,
+    // The splat patch replaces color_fragment only, so the bump rides the stock
+    // normal_fragment_maps path untouched. 0.08 is enough for raking light to
+    // catch the ground without the relief fighting the splat colours at noon.
+    bumpMap: bump,
+    bumpScale: 0.08,
   });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -327,6 +435,7 @@ function fillTile(
   const position = geometry.attributes.position.array as Float32Array;
   const normal = geometry.attributes.normal.array as Float32Array;
   const biome = geometry.attributes.aBiome.array as Float32Array;
+  const uv = geometry.attributes.uv.array as Float32Array;
 
   for (let j = 0; j < dim; j++) {
     const wz = originZ + (j - 1) * step;
@@ -359,6 +468,11 @@ function fillTile(
       biome[v] = b.colony;
       biome[v + 1] = b.ridge;
       biome[v + 2] = b.coast;
+
+      // World-anchored UV on the same 9 m period as the splat fetches, so the
+      // bump detail is continuous across tile and LOD boundaries.
+      uv[k * 2] = (originX + lx) * TEXTURE_SCALE;
+      uv[k * 2 + 1] = (originZ + lz) * TEXTURE_SCALE;
     }
   }
 
@@ -380,12 +494,17 @@ function fillTile(
       biome[v] = biome[src];
       biome[v + 1] = biome[src + 1];
       biome[v + 2] = biome[src + 2];
+      const srcUv = (cj * dim + ci) * 2;
+      const vUv = (j * dim + i) * 2;
+      uv[vUv] = uv[srcUv];
+      uv[vUv + 1] = uv[srcUv + 1];
     }
   }
 
   geometry.attributes.position.needsUpdate = true;
   geometry.attributes.normal.needsUpdate = true;
   geometry.attributes.aBiome.needsUpdate = true;
+  geometry.attributes.uv.needsUpdate = true;
   geometry.computeBoundingSphere();
 }
 
@@ -399,6 +518,11 @@ function createGeometry(lod: number, index: THREE.BufferAttribute): THREE.Buffer
     attribute.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute(name, attribute);
   }
+  // Splat colours sample in world space in the fragment, but the stock bump
+  // chunk needs a real `uv` attribute to derive vBumpMapUv from.
+  const uv = new THREE.BufferAttribute(new Float32Array(count * 2), 2);
+  uv.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("uv", uv);
   geometry.setIndex(index);
   return geometry;
 }
@@ -456,8 +580,9 @@ function roadGeometry(halfWidth: number, z0: number, z1: number, lift: number) {
   return geometry;
 }
 
-function createWorld() {
-  const textures = groundTextures();
+function createWorld(detail: boolean) {
+  const textures = groundTextures(detail ? 2 : 1);
+  const bump = detail ? detailBumpTexture() : null;
   const uniforms: Uniforms = {
     uSoil: { value: textures.soil },
     uMoss: { value: textures.moss },
@@ -467,7 +592,7 @@ function createWorld() {
     uDay: { value: 1 },
     uNightTint: { value: new THREE.Color(0.44, 0.48, 0.66) },
   };
-  const material = terrainMaterial(uniforms);
+  const material = terrainMaterial(uniforms, bump);
   const indices = LOD_SEGMENTS.map((segments) => buildIndex(segments + 3));
   const scratch = new Float32Array((LOD_SEGMENTS[0] + 3) * (LOD_SEGMENTS[0] + 3));
   const pooled: THREE.BufferGeometry[][] = [[], [], []];
@@ -575,12 +700,18 @@ function createWorld() {
       textures.moss.dispose();
       textures.rock.dispose();
       textures.sand.dispose();
+      bump?.dispose();
     },
   };
 }
 
 export function Terrain() {
-  const world = useMemo(() => createWorld(), []);
+  const quality = useGameStore((s) => s.quality);
+  // Splat resolution and the bump fetches are texture-bandwidth costs — the
+  // one resource the rescue tier is short of — so low keeps the shipped
+  // 512/256 canvases and no bump. Tier changes are rare (the tuner only walks
+  // down), so rebuilding the world for one is fine.
+  const world = useMemo(() => createWorld(quality !== "low"), [quality]);
 
   useEffect(() => world.dispose, [world]);
 

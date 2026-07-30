@@ -74,7 +74,7 @@ function QualityRig() {
   const camera = useThree((s) => s.camera);
   const scene = useThree((s) => s.scene);
   const gl = useThree((s) => s.gl);
-  const lastShadows = useRef<boolean | null>(null);
+  const lastShadows = useRef<string | null>(null);
 
   useEffect(() => {
     const settings = QUALITY[quality];
@@ -85,9 +85,13 @@ function QualityRig() {
     }
 
     // R3F's own configure() has already applied the `shadows` prop by now, so
-    // the flip has to be tracked here rather than read off the renderer.
-    const flipped = lastShadows.current !== null && lastShadows.current !== settings.shadowsEnabled;
-    lastShadows.current = settings.shadowsEnabled;
+    // the flip has to be tracked here rather than read off the renderer. The
+    // map *type* is part of the same key: SHADOWMAP_TYPE is a shader define in
+    // every lit program, so a pcf<->vsm change needs the same full rebuild an
+    // enabled flip does — R3F sets shadowMap.needsUpdate but not the materials.
+    const shadowKey = `${settings.shadowsEnabled}:${settings.shadowType}`;
+    const flipped = lastShadows.current !== null && lastShadows.current !== shadowKey;
+    lastShadows.current = shadowKey;
     if (flipped) invalidateMaterials(scene);
 
     const resized = applyShadowMapSize(scene, settings.shadowMapSize);
@@ -173,7 +177,18 @@ export function GameCanvas() {
 
   return (
     <Canvas
-      shadows={settings.shadowsEnabled}
+      // Explicit strings, never `true`: R3F maps `true` to PCFSoftShadowMap,
+      // which three r185 deprecated — it warns on every boot and falls back to
+      // plain PCF anyway. "variance" is the soft-penumbra tier (blur configured
+      // on the light in DayNight); "percentage" is the honest name for the PCF
+      // fallback a tier gets if it ever ships shadowType "pcf".
+      shadows={
+        settings.shadowsEnabled
+          ? settings.shadowType === "vsm"
+            ? "variance"
+            : "percentage"
+          : false
+      }
       dpr={[1, settings.dprCap]}
       gl={{
         antialias: true,

@@ -37,6 +37,36 @@ export type QualitySettings = {
   postFx: "off" | "bloom" | "full";
   /** N8AO in the composer. Only ever true when `postFx` is "full". */
   ao: boolean;
+  /**
+   * Renderer shadow filter. "vsm" buys a real blurred penumbra (the light's
+   * `shadow.radius`/`shadow.blurSamples` drive a separable blur over the whole
+   * map every shadow update) but also draws shadow *receivers* into the depth
+   * pass — that is how three r185's WebGLShadowMap works, not an option. "pcf"
+   * is the cheap fallback: three r185 deprecated PCFSoftShadowMap (it warns and
+   * silently falls back), so "pcf" must map to plain PCFShadowMap, softened
+   * only by `shadowRadius` tap spread.
+   */
+  shadowType: "pcf" | "vsm";
+  /**
+   * The light's `shadow.radius`. Under VSM it is the blur radius in texels;
+   * under PCF it spreads the fixed tap pattern. Read even on tiers with
+   * shadows disabled so the value is defined if a tier flips them on.
+   */
+  shadowRadius: number;
+  /** VSM separable-blur taps per direction; ignored by PCF. */
+  shadowBlurSamples: number;
+  /**
+   * Composer MSAA samples. PostFX clamps this at runtime to the context's
+   * `capabilities.maxSamples`, and to 2 on coarse pointers — tile-based mobile
+   * GPUs pay for the resolve, and the phone budget predates this field. 0 on
+   * tiers that never mount a composer.
+   */
+  msaa: number;
+  /** postprocessing GodRays sourced from the sun disc. Costs three extra
+      half-resolution passes per frame, so the top tier only. */
+  godRays: boolean;
+  /** The filmic grade: brightness/contrast + saturation, one merged pass. */
+  grade: boolean;
   /** Camera far plane in metres — also the useful terrain draw distance. */
   farPlane: number;
   /** Multiplier on weather particle counts. */
@@ -63,6 +93,12 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowsEnabled: false,
     postFx: "off",
     ao: false,
+    shadowType: "pcf",
+    shadowRadius: 1,
+    shadowBlurSamples: 8,
+    msaa: 0,
+    godRays: false,
+    grade: false,
     farPlane: 260,
     particleScale: 0.35,
     grassDensity: 0.3,
@@ -75,6 +111,14 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowsEnabled: true,
     postFx: "bloom",
     ao: false,
+    // VSM at 8 taps is close to three's own defaults (8 taps, radius 4), so
+    // the medium blur pass costs roughly what a stock VSM setup costs.
+    shadowType: "vsm",
+    shadowRadius: 5,
+    shadowBlurSamples: 8,
+    msaa: 4,
+    godRays: false,
+    grade: true,
     farPlane: 340,
     particleScale: 0.7,
     grassDensity: 0.65,
@@ -87,6 +131,12 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowsEnabled: true,
     postFx: "full",
     ao: true,
+    shadowType: "vsm",
+    shadowRadius: 6,
+    shadowBlurSamples: 12,
+    msaa: 8,
+    godRays: true,
+    grade: true,
     farPlane: 420,
     particleScale: 1,
     grassDensity: 1,
@@ -152,11 +202,14 @@ export function describeTier(tier: QualityTier): string {
   const fx =
     q.postFx === "off"
       ? "no post FX"
-      : q.postFx === "full"
-        ? "bloom+AO"
-        : "bloom";
+      : [
+          "bloom",
+          ...(q.ao ? ["AO"] : []),
+          ...(q.godRays ? ["rays"] : []),
+          ...(q.grade ? ["grade"] : []),
+        ].join("+");
   const shadows = q.shadowsEnabled
-    ? `${q.shadowMapSize} shadows`
+    ? `${q.shadowMapSize} ${q.shadowType === "vsm" ? "soft " : ""}shadows`
     : "no shadows";
   const flora = Math.round(q.vegetationScale * 100);
   return `${q.dprCap}× pixels · ${shadows} · ${fx} · ${q.farPlane} m draw · ${flora}% flora`;

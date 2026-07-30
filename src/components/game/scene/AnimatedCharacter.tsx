@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { sampleHeight } from "@/game/worldHeight";
 import { AIM_EVENT, attackPoseActive } from "@/game/feedback";
 import type { AimTelemetry } from "@/game/feedback";
+import { useGameStore } from "@/game/store";
 import type { AnimState } from "@/game/types";
 
 type Props = {
@@ -13,10 +14,12 @@ type Props = {
   variant?: "operative" | "colonist";
 };
 
-const SUIT = "#3a4550";
-const DARK = "#232a33";
-const BOOT = "#262d36";
-const PACK = "#2c353f";
+// Suit palette warmed a step from the shipped blue-slate so the kit sits in
+// the amber key light instead of fighting it; still comfortably >= 0.2 albedo.
+const SUIT = "#454b4e";
+const DARK = "#2a2e33";
+const BOOT = "#2e2f34";
+const PACK = "#343a3f";
 const SKIN = "#c19a7b";
 const HAIR = "#4a4038";
 
@@ -49,7 +52,16 @@ function approach(
   return current + (target - current) * (1 - Math.exp(-rate * dt));
 }
 
-function SuitMaterial({ cyber, accent }: { cyber: boolean; accent: string }) {
+function SuitMaterial({
+  cyber,
+  accent,
+  roughness = 0.55,
+}: {
+  cyber: boolean;
+  accent: string;
+  /** Per-panel roughness variance (0.45-0.7 band) — cloth is never one value. */
+  roughness?: number;
+}) {
   return cyber ? (
     <meshStandardMaterial
       color={accent}
@@ -59,7 +71,7 @@ function SuitMaterial({ cyber, accent }: { cyber: boolean; accent: string }) {
       roughness={0.25}
     />
   ) : (
-    <meshStandardMaterial color={SUIT} metalness={0.3} roughness={0.55} />
+    <meshStandardMaterial color={SUIT} metalness={0.3} roughness={roughness} />
   );
 }
 
@@ -67,6 +79,13 @@ const wp = new THREE.Vector3();
 
 /**
  * Procedural humanoid — EVA survey suit, ~1.8 m, all primitives.
+ *
+ * COORDINATE CANON: the rig faces +z (chest plate at z=+0.13, pack at
+ * z=-0.2) with +y up, so the character's anatomical LEFT is +x and RIGHT is
+ * -x. Theo's cybernetic arm is the LEFT (novel canon): the cyber / scan /
+ * instrument arm lives at +x, the weapon arm at -x. Every side-dependent
+ * sign below (abduction z, aim/scan head yaw and cant, spine blading)
+ * follows from that convention — do not "fix" one without the others.
  *
  * Joint chain: pelvis (bob/sway/counter-yaw/crouch) -> hips -> knees ->
  * ankles, and pelvis -> spine (pitch/shoulder counter-yaw) -> chest ->
@@ -89,6 +108,11 @@ export function AnimatedCharacter({
   cyberArm = true,
   variant = "operative",
 }: Props) {
+  // Low tier renders the shipped geometry byte-for-byte; the softer segment
+  // counts and the visor clearcoat below are a medium/high spend (~+40% rig
+  // vertices, <= ~8 rig instances in the scene).
+  const soft = useGameStore((s) => s.quality) !== "low";
+
   const root = useRef<THREE.Group>(null);
   const pelvis = useRef<THREE.Group>(null);
   const spine = useRef<THREE.Group>(null);
@@ -181,8 +205,11 @@ export function AnimatedCharacter({
 
     const t = idleT.current;
     const p = phase.current;
-    const sL = Math.sin(p);
-    const cL = Math.cos(p);
+    // Rig faces +z: anatomical left = +x (see component doc). The L phase is
+    // negated so each limb keeps the same timing relative to its own side
+    // after the canon arm swap — the gait is the exact mirror of the old rig.
+    const sL = -Math.sin(p);
+    const cL = -Math.cos(p);
     const sR = -sL;
     const cR = -cL;
 
@@ -217,8 +244,9 @@ export function AnimatedCharacter({
     if (hipL.current) {
       hipL.current.rotation.x =
         -hipAmp * sL * gait + 0.3 * w.air - 0.3 * crouchLeg;
-      // + narrows the left leg inward — the aim stance squares up slightly.
-      hipL.current.rotation.z = 0.07 * w.scan - 0.1 * crouchLeg + 0.05 * aimW;
+      // The left leg hangs at +x, so NEGATIVE z narrows it inward — the aim
+      // stance squares up slightly.
+      hipL.current.rotation.z = -0.07 * w.scan + 0.1 * crouchLeg - 0.05 * aimW;
     }
     if (kneeL.current) {
       kneeL.current.rotation.x =
@@ -233,7 +261,7 @@ export function AnimatedCharacter({
     if (hipR.current) {
       hipR.current.rotation.x =
         -hipAmp * sR * gait + 0.3 * w.air - 0.3 * crouchLeg;
-      hipR.current.rotation.z = -0.07 * w.scan + 0.1 * crouchLeg - 0.05 * aimW;
+      hipR.current.rotation.z = 0.07 * w.scan - 0.1 * crouchLeg + 0.05 * aimW;
     }
     if (kneeR.current) {
       kneeR.current.rotation.x =
@@ -268,19 +296,20 @@ export function AnimatedCharacter({
         0.06 * w.scan -
         0.05 * w.air +
         0.06 * aimW;
-      // +y blades the right shoulder back into the stock; the strike swings
-      // the torso the other way, through the sweep.
-      spine.current.rotation.y = -0.16 * sL * gait + 0.12 * aimW - 0.25 * atkW;
+      // -y blades the right (-x, weapon) shoulder back into the stock; the
+      // strike swings the torso the other way, through the sweep.
+      spine.current.rotation.y = -0.16 * sL * gait - 0.12 * aimW + 0.25 * atkW;
     }
     if (ribcage.current) {
       const br = Math.sin(t * 2.3) * (0.4 + 0.6 * idleW);
       ribcage.current.scale.set(1 + 0.008 * br, 1 + 0.014 * br, 1 + 0.02 * br);
     }
 
-    // Arms counter-swing the same-side leg; scan owns the left arm, combat
-    // owns the right (and the left when not scanning). Aim owns both — the
-    // right extends the rifle, the left crosses to support the fore-end — so
-    // the guard poses fade out under it rather than stacking.
+    // Arms counter-swing the same-side leg; scan owns the LEFT (+x,
+    // instrument) arm, combat owns the right (and the left when not
+    // scanning). Aim owns both — the RIGHT (-x, weapon) extends the rifle,
+    // the left crosses to support the fore-end — so the guard poses fade out
+    // under it rather than stacking.
     const cbtL = w.cbt * (1 - w.scan) * (1 - aimW);
     const cbtR = w.cbt * (1 - 0.5 * w.scan) * (1 - Math.max(aimW, atkW));
     const poseL = Math.max(cbtL, w.scan, aimW);
@@ -292,12 +321,14 @@ export function AnimatedCharacter({
         0.85 * cbtL -
         1.2 * aimW +
         0.15 * w.air;
+      // Left arm hangs at +x: POSITIVE z abducts outward (air flare, cyber
+      // bulk); scan, guard and aim-support pull it inward across the chest.
       shL.current.rotation.z =
-        -0.1 -
-        (cyberArm ? 0.06 : 0) -
-        0.3 * w.air +
-        0.15 * w.scan +
-        0.45 * cbtL +
+        0.1 +
+        (cyberArm ? 0.06 : 0) +
+        0.3 * w.air -
+        0.15 * w.scan -
+        0.45 * cbtL -
         0.55 * aimW;
     }
     if (elL.current) {
@@ -318,8 +349,10 @@ export function AnimatedCharacter({
         1.35 * atkW +
         0.15 * w.air +
         0.25 * recoil;
+      // Right arm hangs at -x: NEGATIVE z abducts outward; guard, aim and
+      // the strike sweep pull it inward toward the centreline.
       shR.current.rotation.z =
-        0.1 + 0.3 * w.air - 0.35 * cbtR - 0.3 * aimW - 0.6 * atkW;
+        -0.1 - 0.3 * w.air + 0.35 * cbtR + 0.3 * aimW + 0.6 * atkW;
     }
     if (elR.current) {
       elR.current.rotation.x =
@@ -336,20 +369,20 @@ export function AnimatedCharacter({
       weapon.current.visible = combat || w.aim > 0.05;
     }
 
-    // Head: idle glances, slight counter-yaw to the gait, tilts down-left to
-    // the wrist instrument while scanning, up a touch when airborne. Aim
-    // brings the head over the right shoulder and cants the cheek to the
-    // stock.
+    // Head: idle glances, slight counter-yaw to the gait, tilts down toward
+    // the LEFT (+x) wrist instrument while scanning, up a touch when
+    // airborne. Aim brings the head over the true RIGHT (-x, weapon)
+    // shoulder and cants the cheek to the stock.
     if (head.current) {
       head.current.rotation.y =
-        lk.curYaw * idleW + 0.1 * sL * gait - 0.15 * w.scan + 0.08 * aimW;
+        lk.curYaw * idleW + 0.1 * sL * gait + 0.15 * w.scan - 0.08 * aimW;
       head.current.rotation.x =
         lk.curPitch * idleW +
         0.42 * w.scan +
         0.06 * w.run * gait -
         0.1 * w.air +
         0.04 * aimW;
-      head.current.rotation.z = -0.1 * aimW;
+      head.current.rotation.z = 0.1 * aimW;
     }
   });
 
@@ -359,8 +392,9 @@ export function AnimatedCharacter({
     <group ref={root}>
       <group ref={pelvis} position={[0, 0.95, 0]}>
         <mesh castShadow position={[0, 0.02, 0]}>
+          {/* Kept a box: it sits under the belt trim and never reads. */}
           <boxGeometry args={[0.3, 0.16, 0.21]} />
-          <meshStandardMaterial color={SUIT} metalness={0.3} roughness={0.55} />
+          <meshStandardMaterial color={SUIT} metalness={0.3} roughness={0.57} />
         </mesh>
         <mesh position={[0, 0.1, 0]}>
           <boxGeometry args={[0.32, 0.05, 0.22]} />
@@ -373,11 +407,13 @@ export function AnimatedCharacter({
           />
         </mesh>
 
-        {/* Left leg */}
-        <group ref={hipL} position={[-0.105, -0.05, 0]}>
+        {/* Left leg (+x — rig faces +z, so anatomical left = +x) */}
+        <group ref={hipL} position={[0.105, -0.05, 0]}>
           <mesh castShadow position={[0, -0.2, 0]}>
-            <capsuleGeometry args={[0.085, 0.26, 4, 8]} />
-            <meshStandardMaterial color={SUIT} roughness={0.6} />
+            <capsuleGeometry
+              args={soft ? [0.085, 0.26, 4, 10] : [0.085, 0.26, 4, 8]}
+            />
+            <meshStandardMaterial color={SUIT} roughness={0.62} />
           </mesh>
           <group ref={kneeL} position={[0, -0.41, 0]}>
             <mesh position={[0, 0, 0.055]}>
@@ -385,23 +421,35 @@ export function AnimatedCharacter({
               <meshStandardMaterial color={DARK} roughness={0.5} />
             </mesh>
             <mesh position={[0, -0.18, 0]}>
-              <capsuleGeometry args={[0.068, 0.24, 4, 8]} />
-              <meshStandardMaterial color={SUIT} roughness={0.6} />
+              <capsuleGeometry
+                args={soft ? [0.068, 0.24, 4, 10] : [0.068, 0.24, 4, 8]}
+              />
+              <meshStandardMaterial color={SUIT} roughness={0.58} />
             </mesh>
             <group ref={ankleL} position={[0, -0.38, 0]}>
-              <mesh position={[0, -0.045, 0.05]}>
-                <boxGeometry args={[0.14, 0.1, 0.29]} />
-                <meshStandardMaterial color={BOOT} roughness={0.55} />
+              <mesh
+                position={[0, -0.045, 0.05]}
+                rotation={soft ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+                scale={soft ? [1.15, 1, 0.8] : [1, 1, 1]}
+              >
+                {soft ? (
+                  <capsuleGeometry args={[0.062, 0.17, 2, 8]} />
+                ) : (
+                  <boxGeometry args={[0.14, 0.1, 0.29]} />
+                )}
+                <meshStandardMaterial color={BOOT} roughness={0.66} />
               </mesh>
             </group>
           </group>
         </group>
 
-        {/* Right leg */}
-        <group ref={hipR} position={[0.105, -0.05, 0]}>
+        {/* Right leg (-x) */}
+        <group ref={hipR} position={[-0.105, -0.05, 0]}>
           <mesh castShadow position={[0, -0.2, 0]}>
-            <capsuleGeometry args={[0.085, 0.26, 4, 8]} />
-            <meshStandardMaterial color={SUIT} roughness={0.6} />
+            <capsuleGeometry
+              args={soft ? [0.085, 0.26, 4, 10] : [0.085, 0.26, 4, 8]}
+            />
+            <meshStandardMaterial color={SUIT} roughness={0.62} />
           </mesh>
           <group ref={kneeR} position={[0, -0.41, 0]}>
             <mesh position={[0, 0, 0.055]}>
@@ -409,13 +457,23 @@ export function AnimatedCharacter({
               <meshStandardMaterial color={DARK} roughness={0.5} />
             </mesh>
             <mesh position={[0, -0.18, 0]}>
-              <capsuleGeometry args={[0.068, 0.24, 4, 8]} />
-              <meshStandardMaterial color={SUIT} roughness={0.6} />
+              <capsuleGeometry
+                args={soft ? [0.068, 0.24, 4, 10] : [0.068, 0.24, 4, 8]}
+              />
+              <meshStandardMaterial color={SUIT} roughness={0.58} />
             </mesh>
             <group ref={ankleR} position={[0, -0.38, 0]}>
-              <mesh position={[0, -0.045, 0.05]}>
-                <boxGeometry args={[0.14, 0.1, 0.29]} />
-                <meshStandardMaterial color={BOOT} roughness={0.55} />
+              <mesh
+                position={[0, -0.045, 0.05]}
+                rotation={soft ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+                scale={soft ? [1.15, 1, 0.8] : [1, 1, 1]}
+              >
+                {soft ? (
+                  <capsuleGeometry args={[0.062, 0.17, 2, 8]} />
+                ) : (
+                  <boxGeometry args={[0.14, 0.1, 0.29]} />
+                )}
+                <meshStandardMaterial color={BOOT} roughness={0.66} />
               </mesh>
             </group>
           </group>
@@ -424,8 +482,8 @@ export function AnimatedCharacter({
         <group ref={spine} position={[0, 0.14, 0]}>
           {/* Waist */}
           <mesh position={[0, 0.03, 0]}>
-            <cylinderGeometry args={[0.115, 0.13, 0.16, 10]} />
-            <meshStandardMaterial color={DARK} roughness={0.55} />
+            <cylinderGeometry args={[0.115, 0.13, 0.16, soft ? 14 : 10]} />
+            <meshStandardMaterial color={DARK} roughness={0.52} />
           </mesh>
 
           <group position={[0, 0.2, 0]}>
@@ -452,7 +510,7 @@ export function AnimatedCharacter({
                 <meshStandardMaterial
                   color={DARK}
                   metalness={0.5}
-                  roughness={0.4}
+                  roughness={0.45}
                 />
               </mesh>
               {/* Chest lamp: emissive + bloom replaces the old per-character
@@ -467,12 +525,22 @@ export function AnimatedCharacter({
               </mesh>
               {op && (
                 <>
-                  <mesh castShadow position={[0, 0.02, -0.2]}>
-                    <boxGeometry args={[0.34, 0.4, 0.16]} />
+                  {/* Pack shell: rounded on medium/high (same single shadow
+                      caster as the shipped box — a swap, not an addition). */}
+                  <mesh
+                    castShadow
+                    position={[0, 0.02, -0.2]}
+                    scale={soft ? [1.05, 1, 0.5] : [1, 1, 1]}
+                  >
+                    {soft ? (
+                      <capsuleGeometry args={[0.16, 0.12, 4, 10]} />
+                    ) : (
+                      <boxGeometry args={[0.34, 0.4, 0.16]} />
+                    )}
                     <meshStandardMaterial
                       color={PACK}
                       metalness={0.4}
-                      roughness={0.5}
+                      roughness={0.52}
                     />
                   </mesh>
                   <mesh position={[0, 0.16, -0.205]}>
@@ -487,26 +555,41 @@ export function AnimatedCharacter({
               )}
             </group>
 
-            {/* Left arm (cyber / scan arm) */}
-            <group ref={shL} position={[-0.27, 0.16, 0]}>
-              <mesh position={[-0.02, 0.03, 0]} scale={[1.15, 0.75, 1.05]}>
+            {/* LEFT arm (cyber / scan / instrument arm) — rig faces +z, so
+                anatomical left = +x. Novel canon: Theo's cybernetic arm is
+                the LEFT; this subtree must stay on +x. */}
+            <group ref={shL} position={[0.27, 0.16, 0]}>
+              <mesh position={[0.02, 0.03, 0]} scale={[1.15, 0.75, 1.05]}>
                 <sphereGeometry args={[0.095, 10, 10]} />
                 <meshStandardMaterial
                   color={DARK}
                   metalness={0.4}
-                  roughness={0.45}
+                  roughness={0.48}
                 />
               </mesh>
               <mesh position={[0, -0.14, 0]}>
-                <capsuleGeometry args={[0.065, 0.18, 4, 8]} />
-                <SuitMaterial cyber={cyberArm} accent={accent} />
+                <capsuleGeometry
+                  args={soft ? [0.065, 0.18, 6, 12] : [0.065, 0.18, 4, 8]}
+                />
+                <SuitMaterial
+                  cyber={cyberArm}
+                  accent={accent}
+                  roughness={0.58}
+                />
               </mesh>
               <group ref={elL} position={[0, -0.3, 0]}>
                 <mesh position={[0, -0.13, 0]}>
-                  <capsuleGeometry args={[0.058, 0.16, 4, 8]} />
-                  <SuitMaterial cyber={cyberArm} accent={accent} />
+                  <capsuleGeometry
+                    args={soft ? [0.058, 0.16, 6, 12] : [0.058, 0.16, 4, 8]}
+                  />
+                  <SuitMaterial
+                    cyber={cyberArm}
+                    accent={accent}
+                    roughness={0.62}
+                  />
                 </mesh>
-                {/* Wrist survey instrument */}
+                {/* Wrist survey instrument — screen faces +z, toward the
+                    visor when the scan pose raises this forearm. */}
                 <mesh position={[0, -0.2, 0.06]}>
                   <boxGeometry args={[0.085, 0.06, 0.11]} />
                   <meshStandardMaterial
@@ -519,36 +602,44 @@ export function AnimatedCharacter({
                 </mesh>
                 <mesh position={[0, -0.31, 0.01]} scale={[0.85, 1.1, 1]}>
                   <sphereGeometry args={[0.07, 10, 10]} />
-                  <SuitMaterial cyber={cyberArm} accent={accent} />
+                  <SuitMaterial
+                    cyber={cyberArm}
+                    accent={accent}
+                    roughness={0.55}
+                  />
                 </mesh>
               </group>
             </group>
 
-            {/* Right arm (weapon arm) */}
-            <group ref={shR} position={[0.27, 0.16, 0]}>
-              <mesh position={[0.02, 0.03, 0]} scale={[1.15, 0.75, 1.05]}>
+            {/* RIGHT arm (weapon arm) — anatomical right = -x. */}
+            <group ref={shR} position={[-0.27, 0.16, 0]}>
+              <mesh position={[-0.02, 0.03, 0]} scale={[1.15, 0.75, 1.05]}>
                 <sphereGeometry args={[0.095, 10, 10]} />
                 <meshStandardMaterial
                   color={DARK}
                   metalness={0.4}
-                  roughness={0.45}
+                  roughness={0.48}
                 />
               </mesh>
               <mesh position={[0, -0.14, 0]}>
-                <capsuleGeometry args={[0.065, 0.18, 4, 8]} />
+                <capsuleGeometry
+                  args={soft ? [0.065, 0.18, 6, 12] : [0.065, 0.18, 4, 8]}
+                />
                 <meshStandardMaterial
                   color={SUIT}
                   metalness={0.3}
-                  roughness={0.55}
+                  roughness={0.52}
                 />
               </mesh>
               <group ref={elR} position={[0, -0.3, 0]}>
                 <mesh position={[0, -0.13, 0]}>
-                  <capsuleGeometry args={[0.058, 0.16, 4, 8]} />
+                  <capsuleGeometry
+                    args={soft ? [0.058, 0.16, 6, 12] : [0.058, 0.16, 4, 8]}
+                  />
                   <meshStandardMaterial
                     color={SUIT}
                     metalness={0.3}
-                    roughness={0.55}
+                    roughness={0.6}
                   />
                 </mesh>
                 <mesh position={[0, -0.31, 0.01]} scale={[0.85, 1.1, 1]}>
@@ -556,7 +647,7 @@ export function AnimatedCharacter({
                   <meshStandardMaterial
                     color={SUIT}
                     metalness={0.3}
-                    roughness={0.55}
+                    roughness={0.5}
                   />
                 </mesh>
                 {/* Pulse rifle. Always mounted; useFrame drives visibility
@@ -591,7 +682,9 @@ export function AnimatedCharacter({
                 {op ? (
                   <>
                     <mesh castShadow position={[0, 0.03, 0]} scale={[1, 1.06, 1.02]}>
-                      <sphereGeometry args={[0.135, 14, 12]} />
+                      <sphereGeometry
+                        args={soft ? [0.135, 20, 14] : [0.135, 14, 12]}
+                      />
                       <meshStandardMaterial
                         color={DARK}
                         metalness={0.45}
@@ -599,24 +692,47 @@ export function AnimatedCharacter({
                       />
                     </mesh>
                     <mesh position={[0, 0.03, 0.085]} scale={[1.15, 0.72, 0.62]}>
-                      <sphereGeometry args={[0.1, 12, 10]} />
-                      <meshStandardMaterial
-                        color="#0c1a1a"
-                        emissive={accent}
-                        emissiveIntensity={0.75}
-                        metalness={0.7}
-                        roughness={0.25}
+                      <sphereGeometry
+                        args={soft ? [0.1, 18, 12] : [0.1, 12, 10]}
                       />
+                      {soft ? (
+                        /* The rig's ONE physical material: clearcoat gives
+                           the visor a glass sheen a standard material cannot
+                           fake. <= ~8 rig instances, so the extra shader
+                           cost is negligible; low keeps the shipped
+                           standard material. */
+                        <meshPhysicalMaterial
+                          color="#0c1a1a"
+                          emissive={accent}
+                          emissiveIntensity={0.75}
+                          metalness={0.7}
+                          roughness={0.22}
+                          clearcoat={0.8}
+                          clearcoatRoughness={0.25}
+                        />
+                      ) : (
+                        <meshStandardMaterial
+                          color="#0c1a1a"
+                          emissive={accent}
+                          emissiveIntensity={0.75}
+                          metalness={0.7}
+                          roughness={0.25}
+                        />
+                      )}
                     </mesh>
                   </>
                 ) : (
                   <>
                     <mesh castShadow position={[0, 0.03, 0]}>
-                      <sphereGeometry args={[0.11, 12, 12]} />
+                      <sphereGeometry
+                        args={soft ? [0.11, 18, 14] : [0.11, 12, 12]}
+                      />
                       <meshStandardMaterial color={SKIN} roughness={0.7} />
                     </mesh>
                     <mesh position={[0, 0.065, -0.015]} scale={[1.02, 0.8, 1.02]}>
-                      <sphereGeometry args={[0.112, 12, 10]} />
+                      <sphereGeometry
+                        args={soft ? [0.112, 16, 12] : [0.112, 12, 10]}
+                      />
                       <meshStandardMaterial color={HAIR} roughness={0.85} />
                     </mesh>
                   </>

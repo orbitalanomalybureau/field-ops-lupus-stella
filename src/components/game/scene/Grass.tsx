@@ -172,7 +172,10 @@ function buildField(res: number): Field {
  */
 function bladeGeometry(count: number, span: number): THREE.InstancedBufferGeometry {
   const w = 0.052;
-  const tip = 0.011;
+  // 0.005: the old 22 mm flat top read as a clipped quad up close. A near-point
+  // tip ends each quad in a sub-pixel sliver the raster dissolves on its own —
+  // the opaque-pass equivalent of an alpha-faded tip, at zero cost.
+  const tip = 0.005;
   const h = BLADE_H;
   // Quad one spans local x, quad two spans local z; both taper to a near-point.
   const pos = new Float32Array([
@@ -278,7 +281,16 @@ const GRASS_VERTEX = /* glsl */ `
 
   vec3 gTint = mix(uSoil, uMoss, clamp(gField.a, 0.0, 1.0));
   gTint = mix(gTint, uRock, clamp(gField.b, 0.0, 1.0));
-  vColor.rgb *= gTint * (0.72 + 0.55 * gHash);
+  // Roots grip the ground: the lower half loses its per-blade hash brightness
+  // and darkens toward the raw ground tint, so a blade shares the terrain's
+  // colour where they meet instead of sitting on it like a sticker.
+  float gRoot = 1.0 - smoothstep(0.0, 0.5, gBend);
+  // Tips dissolve: the bright 1.15 tip is pulled toward the mid sward tone so
+  // the top edge stops flashing against its neighbours. Colour fade, not alpha
+  // — transparency would cost blade sorting and discard would cost early-Z.
+  float gTip = smoothstep(0.7, 1.0, gBend);
+  vec3 gShade = gTint * mix(0.72 + 0.55 * gHash, 0.62, gRoot);
+  vColor.rgb = mix(vColor.rgb, vec3(0.82), gTip * 0.55) * gShade;
 `;
 
 function grassPatch(uniforms: GrassUniforms) {
@@ -318,9 +330,11 @@ export function Grass() {
       uSpan: { value: span },
       uField: { value: new THREE.Vector4(FIELD.x0, FIELD.z0, 1 / FIELD.sx, 1 / FIELD.sz) },
       uFieldMap: { value: field.texture },
-      // Blades are already invisible by the time the wrap teleports them across
-      // the patch at half a span, so the ring edge never shows.
-      uFade: { value: new THREE.Vector2(span * 0.32, span * 0.46) },
+      // Wider ramp than the shipped 0.32-0.46: starting sooner and finishing
+      // earlier lets the ring edge dissolve over many metres instead of
+      // shrinking away at the last one, and blades are still long gone before
+      // the wrap teleports them across the patch at half a span.
+      uFade: { value: new THREE.Vector2(span * 0.24, span * 0.42) },
       uWindDir: { value: new THREE.Vector2(1, 0) },
       uGust: { value: 0.12 },
       uTime: { value: 0 },

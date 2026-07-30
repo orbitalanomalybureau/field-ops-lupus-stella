@@ -1,8 +1,10 @@
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { WORLD } from "@/game/data";
 import { atmosphere } from "@/game/atmosphere";
+import { setGodRaySource } from "@/game/godRaySource";
+import { QUALITY } from "@/game/quality";
 import { useGameStore } from "@/game/store";
 
 /**
@@ -22,6 +24,9 @@ const SUN_DAY = new THREE.Color("#ffc79a");
 
 const STORM_TINT = new THREE.Color("#171b23");
 const SCANNER_FOG = new THREE.Color("#12211f");
+// Warm lift blended into the fog at dawn/dusk only: low sun loads the air with
+// scattered warmth that the plain horizon-toward-zenith mix cannot reach.
+const FOG_DUSK_LIFT = new THREE.Color("#e8834a");
 const AMB_NIGHT = new THREE.Color("#304060");
 const AMB_DAY = new THREE.Color("#d09060");
 const AMB_SCAN = new THREE.Color("#60a090");
@@ -55,6 +60,18 @@ export function DayNight() {
   const amb = useRef<THREE.AmbientLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
   const fill = useRef<THREE.DirectionalLight>(null);
+  const sunSrc = useRef<THREE.Mesh>(null);
+  const quality = useGameStore((s) => s.quality);
+  const settings = QUALITY[quality];
+  const vsm = settings.shadowType === "vsm";
+
+  // PostFX cannot reach into this component's JSX, so the god-rays source mesh
+  // is published through the module handle; the null call on unmount (or on a
+  // tier drop, which removes the mesh) retracts it and unmounts the effect.
+  const publishSunSource = useCallback((mesh: THREE.Mesh | null) => {
+    sunSrc.current = mesh;
+    setGodRaySource(mesh);
+  }, []);
   // The world clock resumes from the store, not from a constant: the save
   // persists timeOfDay for session continuity, and QA pins it via the ?tod=
   // deep link. Hardcoding the start silently discarded both — every "resume"
@@ -150,8 +167,11 @@ export function DayNight() {
     atmosphere.zenith.lerp(STORM_TINT, storm.current * 0.75);
 
     // Fog is the horizon pulled a little toward the zenith, so distant terrain
-    // resolves into exactly the colour the dome paints behind it.
+    // resolves into exactly the colour the dome paints behind it. The dusk lift
+    // is damped by storminess — storm air is grey whatever the hour — and must
+    // stay under the scanner lerp so the scanner still owns its palette.
     atmosphere.fog.copy(atmosphere.horizon).lerp(atmosphere.zenith, 0.14);
+    atmosphere.fog.lerp(FOG_DUSK_LIFT, wDusk * 0.16 * (1 - storm.current * 0.7));
     if (scanner) atmosphere.fog.lerp(SCANNER_FOG, 0.55);
 
     // Slow wander so grass, canopy and rain drift agree and still change.
@@ -193,6 +213,23 @@ export function DayNight() {
       sun.current.color.copy(atmosphere.sunColor);
     }
 
+    if (sunSrc.current) {
+      // Rides the camera like SkyDome's rig so the disc never swims; 168 m sits
+      // just inside the sky disc's 170 and well inside every tier's far plane.
+      // The fade window starts at the horizon so the rays die with the sun —
+      // the GodRays weight curve in PostFX only shapes the daytime envelope.
+      sunSrc.current.position
+        .copy(state.camera.position)
+        .addScaledVector(atmosphere.sunDir, 168);
+      const mat = sunSrc.current.material as THREE.MeshBasicMaterial;
+      mat.color.copy(atmosphere.sunColor);
+      mat.opacity =
+        THREE.MathUtils.smoothstep(elev, -0.02, 0.08) *
+        0.62 *
+        (1 - storm.current * 0.85);
+      sunSrc.current.visible = mat.opacity > 0.01;
+    }
+
     if (amb.current) {
       amb.current.intensity =
         (scanner ? 0.3 : 0.2 + dayFactor * 0.35) *
@@ -210,9 +247,12 @@ export function DayNight() {
     }
 
     // Weather still sets the visibility envelope; it is filtered here and then
-    // read as a density by the height-fog chunk SkyDome installs.
-    let nearT = scanner ? 14 : 20 + dayFactor * 8;
-    let farT = scanner ? 85 : 120 + dayFactor * 50;
+    // read as a density by the height-fog chunk SkyDome installs. Clear-air
+    // far sits under the old 120..170 band on purpose — far silhouettes must
+    // lose contrast before the far plane clips them, and dusk air (the wDusk
+    // term) is thicker still, so the low sun reads through haze, not vacuum.
+    let nearT = scanner ? 14 : 18 + dayFactor * 8;
+    let farT = scanner ? 85 : 112 + dayFactor * 46 - wDusk * 14;
     if (weather === "storm") {
       nearT = 8;
       farT = 55 + (1 - wi) * 30;
@@ -241,7 +281,15 @@ export function DayNight() {
     <group>
       <ambientLight ref={amb} intensity={0.45} color="#d09060" />
       {/* normalBias: dawn and dusk now rake the terrain at ~9 degrees, where a
-          depth-only bias acnes on ground that is near parallel to the light. */}
+          depth-only bias acnes on ground that is near parallel to the light.
+          Bias signs flip with the filter. r185's VSM shader adds the bias to
+          the receiver depth before the Chebyshev test, so a small POSITIVE
+          value pushes surfaces deeper and fights VSM's light-leak tendency
+          (the shader's own 0.3 bleed-reduction remap does the rest) — the
+          domes and tree shadows hold at +0.0003. PCF keeps the shipped
+          negative anti-acne bias. radius/blurSamples are the penumbra knobs
+          (VSM blur, or PCF tap spread on the fallback path); both are live
+          uniforms/defines in r185, safe to retune per tier at runtime. */}
       <directionalLight
         ref={sun}
         castShadow
@@ -254,10 +302,31 @@ export function DayNight() {
         shadow-camera-right={60}
         shadow-camera-top={60}
         shadow-camera-bottom={-60}
-        shadow-bias={-0.00025}
-        shadow-normalBias={0.035}
+        shadow-bias={vsm ? 0.0003 : -0.00025}
+        shadow-normalBias={vsm ? 0.02 : 0.035}
+        shadow-radius={settings.shadowRadius}
+        shadow-blurSamples={settings.shadowBlurSamples}
         position={[55, 72, -25]}
       />
+      {/* God-rays light source, published to PostFX through the module handle.
+          Not a shadow caster, not a light — the ray pass and bloom do the
+          glowing. It sits over SkyDome's sun disc (renderOrder -9), so in the
+          main pass it only warms the sun's core; depth-tested against terrain,
+          which is what occludes the rays behind the ridge. Mounted only on
+          tiers that run the effect, so lower tiers pay zero. */}
+      {settings.godRays && (
+        <mesh ref={publishSunSource} renderOrder={-8}>
+          <sphereGeometry args={[7, 16, 12]} />
+          <meshBasicMaterial
+            color="#ffb070"
+            transparent
+            opacity={0}
+            depthWrite={false}
+            toneMapped={false}
+            fog={false}
+          />
+        </mesh>
+      )}
       <hemisphereLight ref={hemi} args={["#c87840", "#1a2a22", 0.7]} />
       <directionalLight
         ref={fill}

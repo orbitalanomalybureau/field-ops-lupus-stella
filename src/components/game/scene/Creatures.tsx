@@ -234,35 +234,79 @@ const SHADOWFANG_LEGS: [number, number][] = [
   [0.14, -0.26],
 ];
 
-function PrismhoofMesh() {
+/**
+ * `soft` = medium/high tier: higher segment counts and the two-cone antler
+ * gradient. Low keeps the shipped geometry byte-for-byte — 16 agents must
+ * never cost the rescue tier a frame.
+ */
+function PrismhoofMesh({ soft }: { soft: boolean }) {
   return (
     <group>
       <mesh castShadow position={[0, 0.75, 0]}>
-        <capsuleGeometry args={[0.28, 0.55, 4, 8]} />
+        <capsuleGeometry
+          args={soft ? [0.28, 0.55, 6, 12] : [0.28, 0.55, 4, 8]}
+        />
         <meshStandardMaterial color="#d0c0a8" roughness={0.65} />
       </mesh>
       <mesh castShadow position={[0, 1.2, 0.4]}>
-        <sphereGeometry args={[0.22, 10, 10]} />
+        <sphereGeometry args={soft ? [0.22, 16, 12] : [0.22, 10, 10]} />
         <meshStandardMaterial color="#d8cbb8" />
       </mesh>
       {[-0.12, 0.12].map((sx, i) => (
-        <mesh key={i} position={[sx, 1.65, 0.42]} rotation={[-0.25, 0, sx * 2]}>
-          <coneGeometry args={[0.07, 0.75, 5]} />
-          <meshStandardMaterial
-            color="#b0e8ff"
-            emissive="#66ccff"
-            emissiveIntensity={0.7}
-            transparent
-            opacity={0.9}
-            metalness={0.6}
-            roughness={0.2}
-          />
-        </mesh>
+        <group
+          key={i}
+          position={[sx, 1.65, 0.42]}
+          rotation={[-0.25, 0, sx * 2]}
+        >
+          {soft ? (
+            /* Two stacked cones fake an emissive gradient: dim shaft, hot
+               tip. Emissive only — never a light, never a shadow caster. */
+            <>
+              <mesh position={[0, -0.135, 0]}>
+                <coneGeometry args={[0.07, 0.48, 10]} />
+                <meshStandardMaterial
+                  color="#b0e8ff"
+                  emissive="#66ccff"
+                  emissiveIntensity={0.55}
+                  transparent
+                  opacity={0.9}
+                  metalness={0.6}
+                  roughness={0.2}
+                />
+              </mesh>
+              <mesh position={[0, 0.24, 0]}>
+                <coneGeometry args={[0.042, 0.34, 10]} />
+                <meshStandardMaterial
+                  color="#c8f0ff"
+                  emissive="#7fd6ff"
+                  emissiveIntensity={1.15}
+                  transparent
+                  opacity={0.9}
+                  metalness={0.6}
+                  roughness={0.2}
+                />
+              </mesh>
+            </>
+          ) : (
+            <mesh>
+              <coneGeometry args={[0.07, 0.75, 5]} />
+              <meshStandardMaterial
+                color="#b0e8ff"
+                emissive="#66ccff"
+                emissiveIntensity={0.7}
+                transparent
+                opacity={0.9}
+                metalness={0.6}
+                roughness={0.2}
+              />
+            </mesh>
+          )}
+        </group>
       ))}
       {PRISMHOOF_LEGS.map(([lx, lz], i) => (
         <group key={i} name="leg" position={[lx, 0.7, lz]}>
           <mesh castShadow position={[0, -0.35, 0]}>
-            <cylinderGeometry args={[0.05, 0.06, 0.7, 5]} />
+            <cylinderGeometry args={[0.05, 0.06, 0.7, soft ? 10 : 5]} />
             <meshStandardMaterial color="#b8a890" />
           </mesh>
         </group>
@@ -274,8 +318,15 @@ function PrismhoofMesh() {
 /**
  * Shared predator mesh. The scavenger tint stays above ~0.2 albedo lightness —
  * anything multiplying a white base material IS the albedo under this star.
+ * `soft` = medium/high tier segment counts; low keeps the shipped geometry.
  */
-function ShadowfangMesh({ scavenger = false }: { scavenger?: boolean }) {
+function ShadowfangMesh({
+  scavenger = false,
+  soft,
+}: {
+  scavenger?: boolean;
+  soft: boolean;
+}) {
   const body = scavenger ? "#5f584a" : "#12141a";
   const head = scavenger ? "#575040" : "#0e1016";
   const limb = scavenger ? "#4f4a3e" : "#0e1016";
@@ -285,15 +336,16 @@ function ShadowfangMesh({ scavenger = false }: { scavenger?: boolean }) {
   return (
     <group>
       <mesh castShadow position={[0, 0.5, 0]} scale={[1, 0.85, 1.15]}>
-        <capsuleGeometry args={[0.22, 0.7, 4, 8]} />
+        <capsuleGeometry args={soft ? [0.22, 0.7, 6, 12] : [0.22, 0.7, 4, 8]} />
         <meshStandardMaterial color={body} roughness={0.9} />
       </mesh>
       <mesh castShadow position={[0, 0.62, 0.55]}>
-        <sphereGeometry args={[0.2, 10, 10]} />
+        <sphereGeometry args={soft ? [0.2, 16, 12] : [0.2, 10, 10]} />
         <meshStandardMaterial color={head} />
       </mesh>
       {[-0.09, 0.09].map((sx, i) => (
         <mesh key={i} name="eye" position={[sx, 0.7, 0.7]}>
+          {/* Eyes stay 8x8: bloom over the emissive does the softening. */}
           <sphereGeometry args={[0.045, 8, 8]} />
           <meshStandardMaterial
             color={eye}
@@ -303,13 +355,13 @@ function ShadowfangMesh({ scavenger = false }: { scavenger?: boolean }) {
         </mesh>
       ))}
       <mesh castShadow position={[0, 0.55, -0.65]} rotation={[-0.5, 0, 0]}>
-        <coneGeometry args={[0.08, 0.45, 5]} />
+        <coneGeometry args={[0.08, 0.45, soft ? 10 : 5]} />
         <meshStandardMaterial color={tail} />
       </mesh>
       {SHADOWFANG_LEGS.map(([lx, lz], i) => (
         <group key={i} name="leg" position={[lx, 0.5, lz]}>
           <mesh castShadow position={[0, -0.25, 0]}>
-            <cylinderGeometry args={[0.045, 0.055, 0.5, 5]} />
+            <cylinderGeometry args={[0.045, 0.055, 0.5, soft ? 10 : 5]} />
             <meshStandardMaterial color={limb} roughness={0.9} />
           </mesh>
         </group>
@@ -319,6 +371,12 @@ function ShadowfangMesh({ scavenger = false }: { scavenger?: boolean }) {
 }
 
 export function Creatures() {
+  // Mesh-detail gate only — the sim below never reads it. Low tier renders
+  // the shipped fauna geometry unchanged; a mid-run auto-tune re-renders the
+  // mesh JSX, but the named "leg"/"eye" nodes persist so the mounted Rig
+  // handles stay valid.
+  const soft = useGameStore((s) => s.quality) !== "low";
+
   const groupRef = useRef<THREE.Group>(null);
   const ghostRef = useRef<THREE.Group>(null);
   const agents = useRef<Agent[]>([]);
@@ -1389,9 +1447,12 @@ export function Creatures() {
         {Array.from({ length: count }).map((_, i) => (
           <group key={i}>
             {i < HERD_COUNT ? (
-              <PrismhoofMesh />
+              <PrismhoofMesh soft={soft} />
             ) : (
-              <ShadowfangMesh scavenger={i >= HERD_COUNT + FANG_COUNT} />
+              <ShadowfangMesh
+                scavenger={i >= HERD_COUNT + FANG_COUNT}
+                soft={soft}
+              />
             )}
           </group>
         ))}

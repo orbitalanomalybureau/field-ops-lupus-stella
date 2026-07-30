@@ -216,16 +216,22 @@ void main() {
     // The 3.4 m ripple is below a pixel past ~30 m; fading it out is the only
     // thing keeping the far water from shimmering.
     float detail = 1.0 - smoothstep(30.0, 95.0, dist);
+    // The 1.7 m ripple drops below a pixel even sooner, so it fades first.
+    float detail2 = 1.0 - smoothstep(12.0, 45.0, dist);
 
     vec2 d0 = uWindDir;
     vec2 d1 = rot2(uWindDir, 0.62);
     vec2 d2 = rot2(uWindDir, -0.95);
     vec2 d3 = rot2(uWindDir, 1.7);
+    vec2 d4 = rot2(uWindDir, -2.3);
 
     vec4 acc = waveTerm(vBase, d0, 27.0, 0.46 * uAmp * damp, 0.55);
     acc += waveTerm(vBase, d1, 15.0, 0.26 * uAmp * damp, 0.75);
     acc += waveTerm(vBase, d2, 8.5, 0.13 * uAmp * damp, 0.9);
     acc += waveTerm(vBase, d3, 3.4, 0.05 * uAmp * damp * detail, 0.9);
+    // Fragment-only fifth octave: fine near-field texture the vertex swell
+    // never needs to carry, and the surface the sparkle glint keys off.
+    acc += waveTerm(vBase, d4, 1.7, 0.045 * uAmp * damp * detail2, 0.85);
 
     vec3 N = normalize(vec3(acc.x, 1.0 - acc.z, acc.y));
     float clearance = depth + acc.w;
@@ -239,14 +245,20 @@ void main() {
     vec3 col = mix(body, sky, fres * (0.45 + 0.55 * uDay));
 
     float sunAmt = saturate(dot(R, uSunDir));
-    float glint = pow(sunAmt, 90.0 - 55.0 * uStorm) * 1.6 + pow(sunAmt, 8.0) * 0.06;
+    // The 260 lobe rides the fine octave: a few pixels wide, so bloom picks
+    // out individual glints without lifting the whole sea into the threshold.
+    float glint = pow(sunAmt, 90.0 - 55.0 * uStorm) * 1.6
+      + pow(sunAmt, 260.0) * 1.2 * detail2
+      + pow(sunAmt, 8.0) * 0.06;
     col += uSunColor * glint * uDay;
 
     float n1 = vnoise(vBase * 0.32 + uWindDir * uPhase * 0.09);
     float n2 = vnoise(vBase * 1.05 - uWindDir * uPhase * 0.22);
     float band = 1.0 - smoothstep(0.0, 0.85, max(clearance, 0.0));
-    float foam = smoothstep(0.42, 0.9, band * (0.55 + 0.65 * n1 + 0.18 * n2));
-    foam = max(foam, 1.0 - smoothstep(0.0, 0.16, max(clearance, 0.0)));
+    // Wider ramp than the shipped 0.42-0.9, with the noise inside it: the foam
+    // line gains a soft, ragged edge instead of tracing a level contour.
+    float foam = smoothstep(0.34, 0.98, band * (0.55 + 0.65 * n1 + 0.18 * n2));
+    foam = max(foam, 1.0 - smoothstep(0.0, 0.2 + 0.12 * n1, max(clearance, 0.0)));
     float caps = smoothstep(0.55, 0.95, acc.w / max(0.45 * uAmp, 0.001));
     foam = saturate(foam + caps * uStorm * (0.3 + 0.5 * n2) * damp);
     col = mix(col, uFoam * (0.2 + 0.85 * uDay), foam);

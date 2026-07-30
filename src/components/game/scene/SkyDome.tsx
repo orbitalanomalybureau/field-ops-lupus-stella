@@ -12,6 +12,15 @@ import { useGameStore } from "@/game/store";
 const FOG_BASE_Y = 1;
 const FOG_FALLOFF = 0.13;
 
+/** Park–Miller LCG. Golden screenshots depend on this exact stream. */
+function seeded(seed: number) {
+  let s = seed;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
 /**
  * Height fog, installed globally by rewriting three's four fog chunks.
  *
@@ -149,6 +158,10 @@ void main() {
   // The 0.42 exponent holds a wide band of horizon colour, so fully fogged
   // terrain dissolves into the sky instead of meeting it at a line.
   vec3 sky = mix( uHorizon, uZenith, pow( clamp( dir.y, 0.0, 1.0 ), 0.42 ) );
+  // A hem of pure horizon colour through the first ~12 degrees: distant fogged
+  // terrain converges on exactly this value (atmosphere.fog derives from it),
+  // so the ground line dissolves into the sky instead of meeting it at a seam.
+  sky = mix( uHorizon, sky, smoothstep( 0.0, 0.22, dir.y ) );
   sky = mix( sky, uHorizon * 0.42, clamp( - dir.y * 3.5, 0.0, 1.0 ) );
 
   // Scatter lobe. It widens as the sun drops, which is what makes dawn and dusk
@@ -167,7 +180,9 @@ void main() {
     float warp = vnoise( cp * 0.6 + uCloudDrift * 0.4 );
     float n = fbm( cp + warp * 0.7 );
     float cover = mix( 0.66, 0.24, uStorm );
-    float dens = smoothstep( cover, cover + 0.26, n ) * band;
+    // A 0.42-wide ramp centred where the old 0.26 one was: coverage midpoint
+    // is preserved, but the edges go wispy instead of ending in a cut-out.
+    float dens = smoothstep( cover - 0.08, cover + 0.34, n ) * band;
 
     vec3 bright = mix( uHorizon, uSunColor, 0.35 ) * ( 0.75 + 0.9 * uDay );
     vec3 dark = mix( uZenith, vec3( 0.02, 0.022, 0.028 ), 0.55 );
@@ -178,6 +193,10 @@ void main() {
   }
 
   gl_FragColor = vec4( sky, 1.0 );
+
+  // +-0.75/255 hash dither: the dome is the one surface smooth enough to band
+  // in 8-bit output. gl_FragCoord keys it, so it is deterministic per pixel.
+  gl_FragColor.rgb += ( hash21( gl_FragCoord.xy ) - 0.5 ) * ( 1.5 / 255.0 );
 
   // No tone mapping: three applies fog after tonemapping and after the colour
   // space transform, so the dome has to take the same path for the horizon and
@@ -230,11 +249,14 @@ export function SkyDome() {
   }, [sky]);
 
   const starPos = useMemo(() => {
+    // Seeded, not Math.random: every rendered point must come from a
+    // deterministic stream or the night-sky golden screenshots flake.
+    const rand = seeded(9973);
     const n = 1000;
     const a = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
-      const th = Math.random() * Math.PI * 2;
-      const ph = Math.random() * Math.PI * 0.48;
+      const th = rand() * Math.PI * 2;
+      const ph = rand() * Math.PI * 0.48;
       const r = 240;
       a[i * 3] = Math.sin(ph) * Math.cos(th) * r;
       a[i * 3 + 1] = Math.cos(ph) * r * 0.55 + 30;

@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { atmosphere } from "@/game/atmosphere";
 import { WORLD } from "@/game/data";
 import { ENTITIES } from "@/game/entities";
-import { QUALITY } from "@/game/quality";
+import { QUALITY, type QualityTier } from "@/game/quality";
 import { useGameStore } from "@/game/store";
 import { SEA_LEVEL, sampleBiome, sampleHeight, slopeAt } from "@/game/worldHeight";
 import { Grass } from "./Grass";
@@ -268,6 +268,58 @@ function windPatch(wind: WindUniforms, bend: THREE.Vector2) {
   };
 }
 
+/**
+ * Cone/cylinder tessellation per tier. Low keeps the shipped counts so the
+ * rescue tier's vertex bill stays byte-identical; medium and high buy rounded
+ * crowns. Per tree: low 102 verts (as shipped), medium 182 (1.8x), high 217
+ * (2.1x) — inside the 2.5x ceiling this pass budgeted across ~700 instances.
+ */
+const TREE_DETAIL: Record<
+  QualityTier,
+  { trunk: number; canopy: [number, number]; canopy2: [number, number]; displace: number }
+> = {
+  low: { trunk: 6, canopy: [7, 1], canopy2: [7, 1], displace: 0 },
+  medium: { trunk: 10, canopy: [12, 2], canopy2: [10, 2], displace: 0.07 },
+  high: { trunk: 10, canopy: [14, 3], canopy2: [12, 2], displace: 0.07 },
+};
+
+/**
+ * Organic crown silhouette, baked once into the shared cone so every instance
+ * gets it for free — displacing per instance would need a per-vertex attribute
+ * stream this budget does not have. The wobble is a pure function of the vertex
+ * position, so duplicated seam and cap-rim vertices displace identically and no
+ * crack can open. The analytic cone normals are kept: at 7% amplitude they
+ * still shade correctly, and computeVertexNormals would split along the seam.
+ */
+function roughenCanopy(
+  geo: THREE.BufferGeometry,
+  height: number,
+  amount: number,
+  seed: number,
+): void {
+  if (amount <= 0) return;
+  const rand = seeded(seed);
+  // Incommensurate phases per cone species so the two layers never wobble in sync.
+  const p1 = 2.1 + rand() * 1.7;
+  const p2 = 3.3 + rand() * 2.2;
+  const p3 = 0.31 + rand() * 0.27;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const r = Math.hypot(x, z);
+    if (r < 1e-4) continue; // the apex and cap centres stay put
+    const wob = Math.sin((x / r) * p1 + y * p3) * Math.cos((z / r) * p2 - y * p3 * 1.7);
+    // A ~9% base flare: boughs sag under their own weight, and the extra width
+    // breaks the ruler-straight cone edge exactly where the silhouette is widest.
+    const t = (y + height / 2) / height;
+    const flare = 0.09 * (1 - THREE.MathUtils.smoothstep(t, 0, 0.3));
+    const k = 1 + amount * wob + flare;
+    pos.setXYZ(i, x * k, y, z * k);
+  }
+}
+
 /** Beacon line down the forest path. Positions are load-bearing — do not move. */
 const BEACON_Z = [48, 62, 78, 95, 115, 135, 148];
 
@@ -289,6 +341,7 @@ export function Forest() {
   );
 
   const parts = useMemo(() => {
+    const detail = TREE_DETAIL[quality];
     const fern = new THREE.CircleGeometry(1.35, 5);
     // Baked tilt keeps the instance rotation pure-Y, which is what lets the wind
     // patch invert the matrix with two dot products.
@@ -310,10 +363,15 @@ export function Forest() {
     canopy2Mat.onBeforeCompile = windPatch(wind, new THREE.Vector2(0.8, 0.03));
     fernMat.onBeforeCompile = windPatch(wind, new THREE.Vector2(0.1, 0));
 
+    const canopy = new THREE.ConeGeometry(8.5, 13, detail.canopy[0], detail.canopy[1]);
+    roughenCanopy(canopy, 13, detail.displace, 517);
+    const canopy2 = new THREE.ConeGeometry(5.8, 9, detail.canopy2[0], detail.canopy2[1]);
+    roughenCanopy(canopy2, 9, detail.displace, 941);
+
     return {
-      trunk: new THREE.CylinderGeometry(1.5, 2.15, 16, 6),
-      canopy: new THREE.ConeGeometry(8.5, 13, 7),
-      canopy2: new THREE.ConeGeometry(5.8, 9, 7),
+      trunk: new THREE.CylinderGeometry(1.5, 2.15, 16, detail.trunk),
+      canopy,
+      canopy2,
       fern,
       rock: new THREE.IcosahedronGeometry(1, 0),
       debris: new THREE.TetrahedronGeometry(1, 0),
@@ -333,7 +391,7 @@ export function Forest() {
         flatShading: true,
       }),
     };
-  }, [wind]);
+  }, [wind, quality]);
 
   useEffect(() => {
     return () => {
@@ -397,7 +455,9 @@ export function Forest() {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere();
     }
-  }, [scatter, dummy, tint]);
+    // `parts` is a dep because a tier change swaps the geometry in `args`,
+    // which rebuilds the InstancedMesh and zeroes every matrix written here.
+  }, [scatter, parts, dummy, tint]);
 
   useLayoutEffect(() => {
     const fern = fernRef.current;
@@ -414,7 +474,7 @@ export function Forest() {
     fern.instanceMatrix.needsUpdate = true;
     if (fern.instanceColor) fern.instanceColor.needsUpdate = true;
     fern.computeBoundingSphere();
-  }, [scatter, dummy, tint]);
+  }, [scatter, parts, dummy, tint]);
 
   useLayoutEffect(() => {
     const rock = rockRef.current;
@@ -443,7 +503,7 @@ export function Forest() {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere();
     }
-  }, [scatter, dummy, tint]);
+  }, [scatter, parts, dummy, tint]);
 
   useLayoutEffect(() => {
     const post = postRef.current;

@@ -17,7 +17,7 @@ import {
   reportHitFrom,
   throughHitStop,
 } from "@/game/feedback";
-import { noiseLevel, reportNoise } from "@/game/noise";
+import { noiseLevel, reportNoise, tickNoise } from "@/game/noise";
 import { passesCeiling } from "@/game/selectors";
 import { useGameStore } from "@/game/store";
 import type { CreatureRecord } from "@/game/store";
@@ -126,6 +126,10 @@ const ATTACK_DAMAGE = 40;
 const ATTACK_COOLDOWN = 0.45;
 const LUNGE_WINDUP = 0.5;
 const SPECIMEN_SEC = 30;
+/** Codex contract: fangs learn ROUTES. Seconds of path data the pack must
+ *  accumulate THIS RUN before the TRACKED read can arm — restored pack
+ *  memory (biasTime) still drives the ambush, never the chip. */
+const TRACK_ARM_SEC = 45;
 /** The coast pack is Book II terrain; below the ceiling it does not exist. */
 const BOOK2 = { book2: true } as const;
 
@@ -175,6 +179,7 @@ let sinceShot = Infinity;
 let shotCount = 0;
 let shotHits = 0;
 let shotKills = 0;
+let dryFires = 0;
 /** Once-per-session fiction latches (the store flag survives reloads). */
 let rifleLineShown = false;
 let picketLineShown = false;
@@ -382,6 +387,8 @@ export function Creatures() {
   const agents = useRef<Agent[]>([]);
   const rigs = useRef<Rig[]>([]);
   const lastPathLearn = useRef(0);
+  /** Route data learned this run, sim-seconds; arms the TRACKED read. */
+  const routeRunSec = useRef(0);
   const saveTimer = useRef(0);
   const attackCd = useRef(0);
   const memoryApplied = useRef(false);
@@ -500,6 +507,9 @@ export function Creatures() {
     // paused so a press inside a menu cannot fire on resume.
     const attackEdge = consumeEdge("attack");
     if (store.phase === "paused") return;
+    // Loudness decays on this sim clock, not wall time — a shot fired into a
+    // pause is still ringing on resume (noise.ts contract).
+    tickNoise(d);
 
     const player = store.playerPos;
     const path = store.pathSamples;
@@ -570,6 +580,7 @@ export function Creatures() {
           a.biasTime += 1.6;
         }
       }
+      routeRunSec.current += 1.6;
     }
 
     const killPredator = (a: Agent) => {
@@ -645,6 +656,7 @@ export function Creatures() {
           if (best.health <= 0) killPredator(best);
         }
       } else if (cells <= 0) {
+        dryFires += 1;
         getAudio().dryFire();
       } else {
         // -------- FIRE: hold-to-aim hitscan bolt. --------
@@ -1263,8 +1275,18 @@ export function Creatures() {
             }
           }
 
+          // Contact is the animal answering the operative — an engaged hunt
+          // on someone who has actually walked the field — never staged
+          // adjacency at a chapter spawn.
+          const hunting =
+            detected &&
+            (a.state === "flank" ||
+              a.state === "lunge" ||
+              (a.state === "stalk" && a.preyIdx < 0));
           if (
+            hunting &&
             dist < 24 &&
+            path.length > 4 &&
             !store.objectives.find((o) => o.id === "shadowfang")?.done
           ) {
             store.completeObjective("shadowfang");
@@ -1374,6 +1396,12 @@ export function Creatures() {
       }
       // Reticle on a live predator slows the look — assist, not autoaim.
       setAimFriction(hot && aiming);
+      // Recharge fill for the pips: 0 unless a cell is actually charging —
+      // the post-shot rest window and a full rack both read as idle.
+      const recharge =
+        cells < MAX_CELLS && sinceShot >= CELL_REST_SEC
+          ? cellRechargeT / CELL_RECHARGE_SEC
+          : 0;
       emitAim({
         aiming,
         cells,
@@ -1381,6 +1409,8 @@ export function Creatures() {
         hot,
         hits: shotHits,
         kills: shotKills,
+        dry: dryFires,
+        recharge,
       });
     }
 
@@ -1438,7 +1468,10 @@ export function Creatures() {
       store.saveCreatureMemory(records);
     }
 
-    store.setTracked(anyTrack);
+    // TRACKED is a route read, not proximity: it cannot arm before the pack
+    // has TRACK_ARM_SEC of this-run path data — a fresh spawn beside a fang
+    // has given them nothing to solve yet.
+    store.setTracked(anyTrack && routeRunSec.current >= TRACK_ARM_SEC);
   });
 
   return (

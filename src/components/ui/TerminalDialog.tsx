@@ -7,6 +7,13 @@ type Props = {
   eyebrow?: string;
   /** Escape / backdrop dismissal. Omit for dialogs that must be answered. */
   onClose?: () => void;
+  /**
+   * Changes whenever the dialog's CONTENT changes (e.g. the dialogue node and
+   * its visible choices). Clicking a choice unmounts the button that held
+   * focus, which drops focus to <body> — outside the trap, where Escape and
+   * Tab are dead. On change, focus is pulled back into the panel.
+   */
+  focusKey?: string;
   /** Backdrop click closes. Off by default — a stray click should not discard a decision. */
   closeOnBackdrop?: boolean;
   className?: string;
@@ -29,6 +36,7 @@ export function TerminalDialog({
   title,
   eyebrow,
   onClose,
+  focusKey,
   closeOnBackdrop = false,
   className = "max-w-sm",
   children,
@@ -49,6 +57,16 @@ export function TerminalDialog({
       if (target && document.contains(target)) target.focus();
     };
   }, []);
+
+  // Runs after the mount effect above, so on first render focus is already
+  // inside and this is a no-op. The panel itself takes focus (tabIndex -1,
+  // outline-none): a mouse user sees no ring appear on a button they did not
+  // reach for, and the next Tab re-enters the trap at the first focusable.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || panel.contains(document.activeElement)) return;
+    panel.focus();
+  }, [focusKey]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

@@ -105,6 +105,8 @@ export function KaguyahimeCoast() {
         distanceFactor={32}
         position={[mx, y + 3.4, mz]}
         center
+        // Below the overlay layer (z-20) — world labels never beat panels.
+        zIndexRange={[12, 0]}
         style={{ pointerEvents: "none" }}
       >
         <div

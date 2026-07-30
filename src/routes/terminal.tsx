@@ -38,14 +38,18 @@ function TerminalShell() {
       "SIM-012 Field Ops: Lupus Stella — ONLINE",
       "Embed channel ready.",
     ];
-    let i = 0;
+    // The cursor lives in prev.length, not a closed-over counter — updaters
+    // run at flush time, so an external index can skip or overrun lines when
+    // React batches ticks.
     const t = window.setInterval(() => {
-      if (i >= lines.length) {
-        window.clearInterval(t);
-        return;
-      }
-      setBootLines((prev) => [...prev, lines[i]!]);
-      i++;
+      setBootLines((prev) => {
+        const next = lines[prev.length];
+        if (next === undefined) {
+          window.clearInterval(t);
+          return prev;
+        }
+        return [...prev, next];
+      });
     }, 280);
     return () => window.clearInterval(t);
   }, []);

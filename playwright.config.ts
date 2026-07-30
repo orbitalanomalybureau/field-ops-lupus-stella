@@ -35,6 +35,27 @@ export default defineConfig({
   projects: [
     {
       name: "chromium-swiftshader",
+      // The CI suite: fast, assertive specs only. The hand-run packs — demo-*
+      // playthrough probes and p*-shots screenshot tours — take tens of
+      // minutes at software-rasterizer frame rates and assert little; they run
+      // via --project=manual instead.
+      testIgnore: ["**/demo-*.spec.ts", "**/p*-shots.spec.ts"],
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: {
+          args: [
+            "--use-gl=angle",
+            "--use-angle=swiftshader",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--force-device-scale-factor=1",
+          ],
+        },
+      },
+    },
+    {
+      name: "manual",
+      testMatch: ["**/demo-*.spec.ts", "**/p*-shots.spec.ts"],
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {

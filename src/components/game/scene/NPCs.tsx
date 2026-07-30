@@ -19,6 +19,12 @@ const FACE_RADIUS = 12;
 /** Nameplate visibility hysteresis so the Html node doesn't flicker-mount. */
 const PLATE_SHOW = 13.5;
 const PLATE_HIDE = 15;
+/** NPCs have no collider, so the camera can stand inside one — under this
+ *  range the distanceFactor scale would blow the plate across the screen. */
+const PLATE_MIN = 2.5;
+/** World-space Html stays under the overlay layer (ClickToPlay/HUD/dialogs
+ *  start at z-20) — drei's default zIndexRange outdraws every modal. */
+const PLATE_Z_RANGE: [number, number] = [12, 0];
 const BARK_RADIUS = 10;
 const UI_PERIOD = 0.25;
 /** 48 slots over the 480 s day: a standing bark rotates every ~10 s. */
@@ -317,9 +323,12 @@ function NpcFigure({
     uiAcc.current += d;
     if (uiAcc.current >= UI_PERIOD) {
       uiAcc.current = 0;
-      // Nameplates are HUD, not world: they stay out of photographs.
+      // Nameplates are HUD, not world: they stay out of photographs, yield
+      // the screen to the dialogue modal, and drop inside PLATE_MIN.
       const plate =
         !s.photoMode &&
+        s.phase !== "dialogue" &&
+        playerDist > PLATE_MIN &&
         (shown.current.plate
           ? playerDist < PLATE_HIDE
           : playerDist < PLATE_SHOW);
@@ -342,6 +351,7 @@ function NpcFigure({
           distanceFactor={22}
           position={[0, 2.35, 0]}
           center
+          zIndexRange={PLATE_Z_RANGE}
           style={{ pointerEvents: "none" }}
         >
           <div className="flex flex-col items-center">

@@ -78,6 +78,8 @@ export function DayNight() {
   // and every pinned screenshot began at 07:52 regardless.
   const todStart = useRef(useGameStore.getState().timeOfDay);
   const clockAcc = useRef(0);
+  /** Wind wander keeps its own clock: a chapter hold stills the sun, not the air. */
+  const windAcc = useRef(0);
   const todPublish = useRef(0);
   const storm = useRef(0);
   const fogNear = useRef(20);
@@ -88,7 +90,13 @@ export function DayNight() {
   useFrame((state, delta) => {
     if (useGameStore.getState().phase === "paused") return;
     const d = Math.min(delta, 0.05);
-    clockAcc.current += d;
+    // A ?chapter deep link pins the clock until its hold deadline passes, so
+    // a staged dusk cannot erode to night while the player finds their feet.
+    // Only timeOfDay stands still; weather and atmosphere keep running.
+    if (performance.now() >= useGameStore.getState().clockHoldUntilMs) {
+      clockAcc.current += d;
+    }
+    windAcc.current += d;
     const tod = (todStart.current + clockAcc.current / WORLD.dayLengthSec) % 1;
     todPublish.current += d;
     if (todPublish.current > 0.5) {
@@ -177,8 +185,8 @@ export function DayNight() {
     // Slow wander so grass, canopy and rain drift agree and still change.
     const angle =
       0.7 +
-      Math.sin(clockAcc.current * 0.011) * 1.1 +
-      Math.sin(clockAcc.current * 0.037) * 0.28;
+      Math.sin(windAcc.current * 0.011) * 1.1 +
+      Math.sin(windAcc.current * 0.037) * 0.28;
     const mag = 0.3 + storm.current * 1.7;
     atmosphere.wind.set(Math.cos(angle) * mag, Math.sin(angle) * mag);
 

@@ -13,6 +13,7 @@ import { postToParent } from "@/lib/embed";
 import { passesCeiling, visibleObjectivesOf } from "./selectors";
 import { getAudio } from "./audio";
 import { hitStop } from "./feedback";
+import { bindingTokenText } from "./input";
 import { detectTier, isQualityTier, lowerTier } from "./quality";
 import type { QualityTier } from "./quality";
 import type {
@@ -151,6 +152,14 @@ const HARVEST_RULES: Record<string, { item: ItemId; nightOnly?: boolean }> = {
  */
 const HARVEST_RESPAWN_DAYS = 0.5;
 
+/**
+ * A held scan re-runs harvestScan every hold interval, so an un-throttled
+ * day refusal would repeat until the key lifts. Wall-clock stamps, module
+ * scope: presentation state that must never ride the SaveBlob.
+ */
+const HARVEST_REFUSAL_COOLDOWN_MS = 6000;
+const harvestRefusalAt: Record<string, number> = {};
+
 /** The game's one definition of night — the window Creatures.tsx hunts in. */
 function isNight(timeOfDay: number): boolean {
   return timeOfDay < 0.25 || timeOfDay > 0.78;
@@ -286,6 +295,21 @@ type GameStore = {
    * overlay renders its fade from the same field. 0 means no evac in flight.
    */
   evacUntil: number;
+  /**
+   * performance.now() deadline while ambient NET chatter stays off the
+   * ticker. Set by a ?chapter deep link so the reader's arrival note is not
+   * flooded off the 10-line feed before they find the camera.
+   * Presentation-transient: never written to the SaveBlob. 0 means no quiet
+   * window in flight.
+   */
+  netQuietUntilMs: number;
+  /**
+   * performance.now() deadline while DayNight holds the world clock. Set by
+   * a ?chapter deep link so a staged dusk cannot roll into night in the
+   * reader's first seconds on the surface. Presentation-transient: never
+   * written to the SaveBlob. 0 means no hold in flight.
+   */
+  clockHoldUntilMs: number;
   playerPos: { x: number; y: number; z: number };
   playerYaw: number;
   playerSpeed: number;
@@ -392,6 +416,9 @@ type GameStore = {
   applyDialogueEffect: (effect?: string) => void;
   addDynamicMarker: (marker: WorldMarker) => void;
   openRuin: () => void;
+  /** Walk back into an already-breached chamber; openRuin's one-shots never
+   * re-fire. Both endings stay reachable after "Continue exploring". */
+  reenterRuin: () => void;
   finishMission: () => void;
   broadcastSignal: () => void;
   setEmbedMode: (v: boolean) => void;
@@ -724,6 +751,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   codexStage: {},
   ending: null,
   evacUntil: 0,
+  netQuietUntilMs: 0,
+  clockHoldUntilMs: 0,
   playerPos: { x: 0, y: 0, z: 40 },
   playerYaw: Math.PI,
   playerSpeed: 0,
@@ -869,6 +898,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
         : { x: 0, y: 0, z: 40 },
       playerYaw: spawn?.yaw ?? Math.PI,
     });
+    // A staged storm's WX alert fired at deep-link time, before the reset
+    // above wiped the ticker — re-post it. Deploy is the only path that
+    // clears the feed, so an in-sim setWeather transition never double-posts.
+    if (get().weather === "storm") {
+      get().pushMessage("WX ALERT — ION STORM CELL");
+    }
     // Pushed after the boilerplate so a chapter link's arrival line is the
     // newest ticker entry — the toast the reader deployed for.
     if (note) get().pushMessage(note);
@@ -897,7 +932,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ),
     });
     get().pushMessage(`OBJECTIVE COMPLETE — ${was.title}`);
-    get().addJournal(was.title, was.detail);
+    // Journal entries are frozen text — resolve the {scan} binding token now
+    // or the raw token rides the save blob into the panel and the export.
+    get().addJournal(was.title, bindingTokenText(was.detail));
     const isDone = (oid: ObjectiveId) =>
       get().objectives.some((o) => o.id === oid && o.done);
     for (const dep of get().objectives) {
@@ -915,7 +952,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (get().revealedObjectives.includes(id)) return;
     set({ revealedObjectives: [...get().revealedObjectives, id] });
     get().pushMessage(obj.tasking ?? `TASKING — ${obj.title}`);
-    get().addJournal(`Tasking: ${obj.title}`, obj.detail);
+    get().addJournal(`Tasking: ${obj.title}`, bindingTokenText(obj.detail));
     get().persist();
   },
 
@@ -966,8 +1003,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().persist();
   },
 
-  pushMessage: (msg) =>
-    set((s) => ({ messages: [msg, ...s.messages].slice(0, 10) })),
+  pushMessage: (msg) => {
+    // Chapter-arrival grace: ambient NET chatter would flood the reader's
+    // arrival note off the 10-line ticker. Only NET lines drop — objective,
+    // scan, and player-action lines still show.
+    if (
+      msg.startsWith("NET —") &&
+      typeof performance !== "undefined" &&
+      performance.now() < get().netQuietUntilMs
+    ) {
+      return;
+    }
+    set((s) => ({ messages: [msg, ...s.messages].slice(0, 10) }));
+  },
 
   setHealth: (health) => set({ health: Math.max(0, Math.min(100, health)) }),
   setStamina: (stamina) =>
@@ -1110,7 +1158,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     // is still valid — report success so the caller records it as scanned.
     if (!rule) return true;
     if (rule.nightOnly && !isNight(get().timeOfDay)) {
-      get().pushMessage("SPECIMEN — spores inert by day; sample after dark");
+      // Refuse loudly once, then hold quiet while the key stays down.
+      const now = typeof performance !== "undefined" ? performance.now() : 0;
+      const last = harvestRefusalAt[targetId] ?? -Infinity;
+      if (now - last > HARVEST_REFUSAL_COOLDOWN_MS) {
+        harvestRefusalAt[targetId] = now;
+        get().pushMessage("SPECIMEN — spores inert by day; sample after dark");
+        getAudio().refusalBuzz();
+      }
       return false;
     }
     // Stamp the regrowth clock; setTimeOfDay clears the site when it lapses.
@@ -1391,6 +1446,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     getAudio().pulseInteract();
   },
 
+  // Phase change only: the breach's one-shots — objective, codex, the seal
+  // line — already fired on any save that gets here, and must not repeat.
+  reenterRuin: () => {
+    if (!get().ruinOpened || get().phase !== "playing") return;
+    set({ phase: "ruins" });
+    getAudio().pulseInteract();
+  },
+
   finishMission: () => {
     get().completeObjective("remember");
     get().unlockCodex("signal");
@@ -1506,7 +1569,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (scene.ceiling === "book2early" && get().spoilerCeiling === "book1") {
         set({ spoilerCeiling: "book2early" });
       }
-      set({ pendingSpawn: scene.spawn, pendingDeployNote: scene.note });
+      // Arrival grace: mute ambient NET chatter so the arrival note holds
+      // the ticker, and have DayNight pin the clock so a staged dusk cannot
+      // roll into night while the reader is still finding the camera.
+      const now = typeof performance !== "undefined" ? performance.now() : 0;
+      set({
+        pendingSpawn: scene.spawn,
+        pendingDeployNote: scene.note,
+        netQuietUntilMs: now + 15000,
+        clockHoldUntilMs: now + 45000,
+      });
       get().setTimeOfDay(scene.tod);
       get().setWeather(scene.wx);
     }
@@ -1546,6 +1618,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   exportJournal: () => {
     const s = get();
     const char = s.getCharacter();
+    // Same lens as the HUD: hidden tasking stays out of both counts, so the
+    // export can't hint at content the run never revealed.
+    const visible = s.visibleObjectives();
     // Every unlocked discovery that continues in the novel, one line per
     // chapter, lowest first. This is the whole point of the funnel: the log
     // the player carries out of the game ends where the book picks up.
@@ -1567,7 +1642,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       "FIELD OPS JOURNAL — LUPUS STELLA",
       `Operative: ${char?.name ?? "unknown"}`,
       `Discoveries: ${s.discoveries}`,
-      `Objectives: ${s.objectives.filter((o) => o.done).length}/${s.objectives.length}`,
+      `Objectives: ${visible.filter((o) => o.done).length}/${visible.length}`,
       "",
       ...s.journal.map(
         (j) =>
@@ -1624,6 +1699,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       codexStage: {},
       ending: null,
       evacUntil: 0,
+      netQuietUntilMs: 0,
+      clockHoldUntilMs: 0,
       playerPos: { x: 0, y: 0, z: 40 },
       playerYaw: Math.PI,
       playerSpeed: 0,

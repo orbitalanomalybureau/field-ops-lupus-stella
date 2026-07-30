@@ -315,6 +315,7 @@ function KeymapCard({ bindings }: { bindings: Keymap }) {
         ))}
       </ul>
       <div className="mt-3 space-y-1 font-mono text-[11px] leading-relaxed text-dim">
+        <p>MOUSE — RMB HOLDS AIM · MOUSE 1 STRIKES</p>
         <p>TOUCH — LEFT THUMB WALKS · RIGHT SIDE LOOKS · TAP INTERACTS</p>
         <p>PAD — STICKS MOVE AND LOOK · A JUMPS · X INTERACTS · RB COMBAT</p>
         <p>? OPENS THIS CARD · HOLD TAB PEEKS IT</p>

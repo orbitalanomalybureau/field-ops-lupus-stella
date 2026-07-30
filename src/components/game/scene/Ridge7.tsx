@@ -261,6 +261,8 @@ export function Ridge7() {
           distanceFactor={30}
           position={[0, 6.5, 0]}
           center
+          // Below the overlay layer (z-20) — world labels never beat panels.
+          zIndexRange={[12, 0]}
           style={{ pointerEvents: "none" }}
         >
           <div

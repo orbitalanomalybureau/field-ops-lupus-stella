@@ -2,6 +2,10 @@ import { useGameStore } from "@/game/store";
 import { sampleHeight } from "@/game/worldHeight";
 import { Html } from "@react-three/drei";
 
+/** World-space Html stays under the overlay layer (ClickToPlay/HUD/dialogs
+ *  start at z-20) — drei's default zIndexRange outdraws every modal. */
+const LABEL_Z_RANGE: [number, number] = [12, 0];
+
 /** Interior ops floor when player enters the central dome. */
 export function CommandDomeInterior() {
   const inside = useGameStore((s) => s.insideDome);
@@ -107,7 +111,15 @@ export function CommandDomeInterior() {
         </mesh>
       </group>
       <pointLight position={[0, 2.2, 0]} color="#ffc090" intensity={8} distance={10} />
-      <Html distanceFactor={14} position={[0, 2.8, 0]} center style={{ pointerEvents: "none" }}>
+      {/* Exit sign over the hatch side, fixed screen size: with a
+          distanceFactor the dome-centre anchor scaled it into a banner over
+          the compass whenever the player stood on the floor. */}
+      <Html
+        position={[0, 1.9, 2]}
+        center
+        zIndexRange={LABEL_Z_RANGE}
+        style={{ pointerEvents: "none" }}
+      >
         <div className="whitespace-nowrap rounded-sm border border-accent/40 bg-void/90 px-2 py-1 font-mono text-[10px] text-accent">
           OPS FLOOR · E to exit
         </div>
@@ -126,6 +138,7 @@ export function DomeHatchMarker() {
       distanceFactor={22}
       position={[0, y + 3.2, 9]}
       center
+      zIndexRange={LABEL_Z_RANGE}
       style={{ pointerEvents: "none" }}
     >
       <div

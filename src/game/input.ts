@@ -98,12 +98,28 @@ type TouchState = {
   scan: boolean;
 };
 
+/**
+ * Touch-first hardware must get TAP prompts from the very first hint, not
+ * after the first touch flips `device`. `pointer: coarse` describes the
+ * PRIMARY pointer, so a touch-capable laptop still opens with keyboard
+ * glyphs; maxTouchPoints only breaks the tie where matchMedia is missing.
+ */
+function initialDevice(): Device {
+  if (typeof window === "undefined") return "keyboard";
+  if (typeof window.matchMedia === "function") {
+    return window.matchMedia("(pointer: coarse)").matches
+      ? "touch"
+      : "keyboard";
+  }
+  return navigator.maxTouchPoints > 0 ? "touch" : "keyboard";
+}
+
 const held = new Set<string>();
 const edgePending = new Set<Action>();
 let keymap: Keymap = structuredCloneMap(DEFAULT_KEYMAP);
 let lookX = 0;
 let lookY = 0;
-let device: Device = "keyboard";
+let device: Device = initialDevice();
 let sensitivity = 1;
 let invertY = false;
 let padIndex: number | null = null;
@@ -154,11 +170,53 @@ export function isHeld(action: Action): boolean {
   return keymap[action].some((code) => held.has(code));
 }
 
+/**
+ * Does this physical key currently map to this action? The one lookup UI
+ * keydown handlers are allowed to use — HUD panel toggles and the app-shell
+ * hotkeys route through here so rebinds in Settings apply everywhere, not
+ * just to the actions PlayerController reads.
+ */
+export function matchesAction(code: string, action: Action): boolean {
+  return keymap[action].includes(code);
+}
+
+/** "KeyE" → "E". The prompt follows a rebind instead of lying about it. */
+export function keyLabel(code: string): string {
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code === "Space") return "SPC";
+  return code.toUpperCase();
+}
+
+/**
+ * Resolve binding tokens in authored copy ({scan} — data.ts objective text)
+ * to the live binding: the touch button's glyph on coarse-pointer devices,
+ * the bound key otherwise. The HUD calls this at render so rebinds stay
+ * honest; the store calls it when detail text is frozen into a journal entry,
+ * where the binding at time of writing is the only one the entry can name.
+ */
+export function bindingTokenText(text: string): string {
+  if (!text.includes("{scan}")) return text;
+  const key = device === "touch" ? "SCN" : keyLabel(keymap.scan[0] ?? "KeyQ");
+  return text.replaceAll("{scan}", key);
+}
+
 /** True once per press. Reading clears it. */
 export function consumeEdge(action: Action): boolean {
   if (!edgePending.has(action)) return false;
   edgePending.delete(action);
   return true;
+}
+
+/**
+ * Drop queued one-shot presses without touching held keys or look state.
+ * Called on phase transitions out of gameplay: an E pressed while a dialogue
+ * or pause menu is open must not survive in edgePending and replay on the
+ * first playing frame — that made Close look broken (the dialogue reopened
+ * itself) and auto-opened NPCs after Resume.
+ */
+export function clearEdges(): void {
+  edgePending.clear();
 }
 
 export function setKeymap(next: Partial<Keymap>): void {

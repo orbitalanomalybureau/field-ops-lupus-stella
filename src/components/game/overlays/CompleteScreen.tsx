@@ -25,13 +25,15 @@ export function CompleteScreen() {
     (s) => s.visibleObjectives().filter((o) => o.done).length,
   );
   const [armed, setArmed] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [tally, setTally] = useState<{
     broadcast: number;
     silent: number;
   } | null>(null);
   const broadcast = ending === "broadcast";
   // This screen only mounts after gameplay, so navigator exists; the guard is
-  // for the share API itself (desktop browsers mostly lack it).
+  // for the share API itself — desktop browsers mostly lack it and get the
+  // clipboard path instead.
   const canShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
 
@@ -40,6 +42,12 @@ export function CompleteScreen() {
     const t = window.setTimeout(() => setArmed(false), 5000);
     return () => window.clearTimeout(t);
   }, [armed]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(t);
+  }, [copied]);
 
   // Communal quiet-protocol tally. Each completed run is counted exactly once:
   // the guard flag persists with the save, so remounting this screen (or
@@ -83,13 +91,24 @@ export function CompleteScreen() {
   };
 
   const shareLog = async () => {
+    if (canShare) {
+      try {
+        await navigator.share({
+          title: "Field Ops — expedition log",
+          text: exportJournal(),
+        });
+      } catch {
+        // Share sheet dismissed or payload refused; the download path remains.
+      }
+      return;
+    }
     try {
-      await navigator.share({
-        title: "Field Ops — expedition log",
-        text: exportJournal(),
-      });
+      await navigator.clipboard.writeText(exportJournal());
+      setCopied(true);
     } catch {
-      // Share sheet dismissed or payload refused; the download path remains.
+      // Clipboard refused (permissions, insecure context) — fall back to the
+      // file the download button already produces.
+      downloadLog();
     }
   };
 
@@ -146,7 +165,7 @@ export function CompleteScreen() {
 
         {tally && (
           <p className="mt-4 font-mono text-[10px] leading-relaxed text-dim">
-            {tallyRuns > TALLY_QUORUM
+            {tallyRuns >= TALLY_QUORUM
               ? `ODYSSEY COMMAND — ${violatedPct}% of field operatives have violated quiet protocol.`
               : "ODYSSEY COMMAND — survey rotation tally sealed pending quorum."}
           </p>
@@ -164,15 +183,13 @@ export function CompleteScreen() {
             >
               Download log
             </button>
-            {canShare && (
-              <button
-                type="button"
-                onClick={() => void shareLog()}
-                className="min-h-11 rounded-md border border-border px-4 text-sm text-muted hover:border-muted hover:text-fg"
-              >
-                Share log
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => void shareLog()}
+              className="min-h-11 rounded-md border border-border px-4 text-sm text-muted hover:border-muted hover:text-fg"
+            >
+              {canShare ? "Share log" : copied ? "COPIED" : "Copy log"}
+            </button>
           </div>
           <a
             href={`${NOVEL_SITE_URL}?utm_source=fieldops&utm_medium=complete&utm_campaign=complete`}

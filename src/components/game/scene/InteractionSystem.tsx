@@ -47,6 +47,7 @@ type Cand = {
 
 export function InteractionSystem() {
   const fernTimer = useRef(0);
+  const perimeterArmed = useRef(false);
   const perimeterDone = useRef(false);
   const scanHold = useRef(0);
   const nearScanId = useRef<string | null>(null);
@@ -65,10 +66,14 @@ export function InteractionSystem() {
     const char = store.getCharacter();
     const scanMul = char?.scanBonus ?? 1;
 
-    if (
-      !perimeterDone.current &&
-      dist2(x, z, WORLD.southGate[0], WORLD.southGate[2]) < 12
-    ) {
+    // Spawn sits inside the gate's 12 m completion ring, so the trigger only
+    // arms once the operative has actually walked away — a fresh deploy must
+    // not complete the perimeter tasking on its first frame.
+    const gateDist = dist2(x, z, WORLD.southGate[0], WORLD.southGate[2]);
+    if (!perimeterArmed.current && gateDist > 25) {
+      perimeterArmed.current = true;
+    }
+    if (perimeterArmed.current && !perimeterDone.current && gateDist < 12) {
       perimeterDone.current = true;
       store.completeObjective("perimeter");
     }
@@ -175,6 +180,14 @@ export function InteractionSystem() {
           : atDoor
             ? "Press E"
             : "Approach",
+      });
+    } else if (store.phase === "playing") {
+      // The breach is permanent, so the door stays a door: both endings live
+      // in the chamber, and a save that chose "Continue exploring" must
+      // always be able to walk back in. Gated off phase "ruins" so the
+      // prompt never renders under the open chamber overlay.
+      considerEntity(ruin, () => store.reenterRuin(), {
+        label: "Return to the chamber",
       });
     }
 

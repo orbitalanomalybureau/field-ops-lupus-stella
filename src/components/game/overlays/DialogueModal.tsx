@@ -56,6 +56,9 @@ export function DialogueModal() {
     <TerminalDialog
       title={`Comms — ${npc.name}`}
       onClose={close}
+      // Choice indexes too, not just the node: a `once` line or a trade can
+      // loop back to the SAME node with the clicked button gone.
+      focusKey={`${nodeId}·${choices.map((c) => c.index).join(".")}`}
       className="flex max-h-[85vh] max-w-lg flex-col"
     >
       <div className="flex shrink-0 items-start justify-between gap-3">

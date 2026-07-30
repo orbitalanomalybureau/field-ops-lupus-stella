@@ -23,6 +23,18 @@ export type AimTelemetry = {
   /** Monotonic counters; the reticle animates on change. */
   hits: number;
   kills: number;
+  /**
+   * Monotonic dry-fire counter. The trigger pulled on empty cells is
+   * audio-only otherwise; the reticle flashes on change so muted and
+   * hard-of-hearing players get the same refusal.
+   */
+  dry: number;
+  /**
+   * Fill fraction (0..1) of the cell currently recharging, 0 when nothing is
+   * charging. Lets the pips show the 1.4 s/cell cadence instead of snapping
+   * empty→full.
+   */
+  recharge: number;
 };
 
 export function emitAim(t: AimTelemetry): void {

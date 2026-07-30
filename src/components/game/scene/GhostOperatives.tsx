@@ -139,7 +139,15 @@ function GhostFigure({ id, callsign }: { id: string; callsign: string }) {
     >
       <AnimatedCharacter accent={accent} combat={false} cyberArm={false} />
       {plate && (
-        <Html distanceFactor={22} position={[0, 2.35, 0]} center style={{ pointerEvents: "none" }}>
+        <Html
+          distanceFactor={22}
+          position={[0, 2.35, 0]}
+          center
+          // Below the overlay layer (z-20) — a ghost's nameplate must never
+          // outdraw a dialogue modal or the HUD.
+          zIndexRange={[12, 0]}
+          style={{ pointerEvents: "none" }}
+        >
           <div
             className="whitespace-nowrap rounded-sm border border-border bg-void/60 px-2 py-0.5 font-mono text-[10px] text-dim"
           >

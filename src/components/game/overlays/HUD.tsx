@@ -8,7 +8,16 @@ import {
   passesCeiling,
   visibleObjectivesOf,
 } from "@/game/selectors";
-import { getKeymap, isHeld, lastDevice, type Device } from "@/game/input";
+import {
+  bindingTokenText,
+  getKeymap,
+  isHeld,
+  keyLabel,
+  lastDevice,
+  matchesAction,
+  type Device,
+} from "@/game/input";
+import { registerPanelCloser } from "@/game/uiPanels";
 import type {
   CodexEntry,
   ItemId,
@@ -38,6 +47,10 @@ const TAPE_HALF_DEG = TAPE_SPAN_DEG / 2;
 const TICK_STEP_DEG = 15;
 /** More pips than this and the tape is unreadable at phone width. */
 const MAX_MARKER_PIPS = 4;
+/** Pip labels closer than this (in tape-width %) collide; one survives. */
+const PIP_TEXT_MIN_SEP_PCT = 12;
+/** Half-width (%) of the text-free band centred on each cardinal letter. */
+const CARDINAL_BAND_PCT = 5;
 
 const CARDINALS: Record<number, string> = {
   0: "N",
@@ -333,13 +346,14 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
-/** "KeyE" → "E". The prompt follows a rebind instead of lying about it. */
-function keyLabel(code: string): string {
-  if (code.startsWith("Key")) return code.slice(3);
-  if (code.startsWith("Digit")) return code.slice(5);
-  if (code === "Space") return "SPC";
-  return code.toUpperCase();
-}
+/**
+ * Objective copy carries a {scan} token (data.ts) so the text can name the
+ * LIVE binding — the touch button's glyph or the rebound key — instead of a
+ * hardcoded Q that Settings can make a lie. Resolution lives in input.ts
+ * (bindingTokenText); the store uses the same helper when detail text is
+ * frozen into journal entries.
+ */
+const detailText = bindingTokenText;
 
 function vitalsTone(health: number) {
   if (health > WARN_HEALTH)
@@ -406,12 +420,18 @@ export function HUD() {
     [objectivesRaw, revealed, spoiler],
   );
 
+  // Routed through matchesAction, not hardcoded codes, so Settings rebinds
+  // apply to the panel toggles too. The keymap is module state read at event
+  // time — no dependency to track.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === "KeyM") setPanel((p) => (p === "map" ? "none" : "map"));
-      if (e.code === "KeyC" && !e.ctrlKey && !e.metaKey)
+      if (matchesAction(e.code, "map"))
+        setPanel((p) => (p === "map" ? "none" : "map"));
+      if (matchesAction(e.code, "codex") && !e.ctrlKey && !e.metaKey)
         setPanel((p) => (p === "codex" ? "none" : "codex"));
-      if (e.code === "KeyO" || e.code === "Tab") {
+      if (matchesAction(e.code, "objectives")) {
+        // Tab is a default objectives binding; unhandled it moves focus out
+        // of the canvas.
         if (e.code === "Tab") e.preventDefault();
         setPanel((p) => (p === "obj" ? "none" : "obj"));
       }
@@ -419,6 +439,17 @@ export function HUD() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Escape closes a transient panel before PlayerController is allowed to
+  // pause (closeTopPanel in uiPanels.ts). The objectives log is the resting
+  // state, not something Escape strips away, so it registers no closer.
+  useEffect(() => {
+    if (panel !== "map" && panel !== "codex") return;
+    return registerPanelCloser(() => {
+      setPanel("obj");
+      return true;
+    });
+  }, [panel]);
 
   useEffect(() => {
     setCodexSeen(readCodexMarker());
@@ -594,8 +625,13 @@ export function HUD() {
         ))}
       </div>
 
+      {/* max-h yields to the vitals panel before the vh cap does: below
+          ~560px of viewport height a flat 48vh buried health and the ZPE bar
+          during combat. The reserve is the vitals panel at its tallest plus
+          its bottom offset; the floor keeps the header and scrollbar findable
+          on the shortest supported landscape. */}
       {panel === "obj" && (
-        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[42vh] sm:max-h-[48vh] sm:top-[11rem] w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[max(2.75rem,min(42vh,100vh-28rem))] sm:max-h-[max(2.75rem,min(48vh,100vh-24.5rem))] sm:top-[11rem] w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
           <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
             OBJECTIVES {doneCount}/{objectives.length}
           </p>
@@ -614,7 +650,11 @@ export function HUD() {
                   {o.optional ? " · opt" : ""}
                   {o.book2 ? " · B2" : ""}
                 </span>
-                {!o.done && <p className="mt-0.5 pl-4 text-muted">{o.detail}</p>}
+                {!o.done && (
+                  <p className="mt-0.5 pl-4 text-muted">
+                    {detailText(o.detail)}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
@@ -622,7 +662,7 @@ export function HUD() {
       )}
 
       {panel === "codex" && (
-        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[46vh] sm:max-h-[55vh] sm:top-[11rem] w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[max(2.75rem,min(46vh,100vh-28rem))] sm:max-h-[max(2.75rem,min(55vh,100vh-24.5rem))] sm:top-[11rem] w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
           <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
             FIELD CODEX
           </p>
@@ -713,6 +753,8 @@ const HIT_FLARE_MS = 150;
 const KILL_FLARE_MS = 300;
 /** How long the just-refilled cell pip shimmers. */
 const PIP_SHIMMER_MS = 700;
+/** Dry-fire refusal flick — the trigger pulled on empty cells. */
+const DRY_FLARE_MS = 180;
 
 /**
  * Hold-to-aim reticle and cell pips. A leaf fed entirely by AIM_EVENT
@@ -722,12 +764,15 @@ const PIP_SHIMMER_MS = 700;
  *
  * States: hidden (not aiming) · frame (corner brackets + dot) · hot (accent
  * tint, brackets tighten) · hit tick (dot swells ~150 ms on a hits increment)
- * · kill mark (X-flare ~300 ms on a kills increment).
+ * · kill mark (X-flare ~300 ms on a kills increment) · dry flick (warn tint
+ * ~180 ms on a dry increment — the refusal must reach muted players too)
+ * · recharge fill (the charging pip fills bottom-up at the cell cadence).
  */
 function Reticle() {
   const [aim, setAim] = useState<AimTelemetry | null>(null);
   const [hitFlare, setHitFlare] = useState(false);
   const [killFlare, setKillFlare] = useState(false);
+  const [dryFlare, setDryFlare] = useState(false);
   /** Index of the pip that just recharged, for the refill shimmer. */
   const [freshPip, setFreshPip] = useState<number | null>(null);
   const prev = useRef<AimTelemetry | null>(null);
@@ -735,6 +780,7 @@ function Reticle() {
   useEffect(() => {
     let hitT = 0;
     let killT = 0;
+    let dryT = 0;
     let pipT = 0;
     const onAim = (e: Event) => {
       const t = (e as CustomEvent<AimTelemetry>).detail;
@@ -751,6 +797,12 @@ function Reticle() {
         window.clearTimeout(killT);
         killT = window.setTimeout(() => setKillFlare(false), KILL_FLARE_MS);
       }
+      // ?? 0 until the emitter ships the counter — undefined must not flash.
+      if (p && (t.dry ?? 0) > (p.dry ?? 0)) {
+        setDryFlare(true);
+        window.clearTimeout(dryT);
+        dryT = window.setTimeout(() => setDryFlare(false), DRY_FLARE_MS);
+      }
       // A cell refilling mid-aim gets a quiet shimmer on the newest pip.
       if (p && t.aiming && p.aiming && t.cells > p.cells) {
         setFreshPip(t.cells - 1);
@@ -763,19 +815,23 @@ function Reticle() {
       window.removeEventListener(AIM_EVENT, onAim);
       window.clearTimeout(hitT);
       window.clearTimeout(killT);
+      window.clearTimeout(dryT);
       window.clearTimeout(pipT);
     };
   }, []);
 
   if (!aim?.aiming) return null;
 
+  const recharge = aim.recharge ?? 0;
   const tone = killFlare
     ? "text-danger"
     : hitFlare
       ? "text-fg"
-      : aim.hot
-        ? "text-accent"
-        : "text-fg/60";
+      : dryFlare
+        ? "text-warn"
+        : aim.hot
+          ? "text-accent"
+          : "text-fg/60";
   const size = aim.hot ? 34 : 42;
 
   return (
@@ -802,19 +858,30 @@ function Reticle() {
             <span className="absolute left-1/2 top-1/2 h-px w-10 -translate-x-1/2 -translate-y-1/2 -rotate-45 bg-danger" />
           </>
         )}
-        {/* Cell pips — capacity as hollow squares, charge as fill. */}
+        {/* Cell pips — capacity as hollow squares, charge as fill. The empty
+            pips flick warn on a dry pull; the charging pip fills bottom-up so
+            the per-cell cadence is legible instead of snapping empty→full. */}
         <div className="absolute left-1/2 top-full mt-2 flex -translate-x-1/2 gap-1">
           {Array.from({ length: aim.maxCells }, (_, i) => (
             <span
               key={i}
-              className={`h-1.5 w-1.5 border ${
+              className={`relative h-1.5 w-1.5 overflow-hidden border ${
                 i < aim.cells
                   ? i === freshPip
                     ? "animate-pulse border-accent bg-accent/70"
                     : "border-accent bg-accent"
-                  : "border-fg/40"
+                  : dryFlare
+                    ? "border-warn"
+                    : "border-fg/40"
               }`}
-            />
+            >
+              {i === aim.cells && recharge > 0 && (
+                <span
+                  className="absolute inset-x-0 bottom-0 bg-accent/60"
+                  style={{ height: `${Math.round(recharge * 100)}%` }}
+                />
+              )}
+            </span>
           ))}
         </div>
       </div>
@@ -972,6 +1039,17 @@ function VitalsBlock() {
   const trackedByFang = useGameStore((s) => s.trackedByFang);
   const [staminaSpent, setStaminaSpent] = useState(false);
   const staminaPrev = useRef(stamina);
+  // Aim is a held posture, not the combat stance — it arrives on AIM_EVENT at
+  // the emitter's ~10 Hz, never as per-frame store state, and Object.is bails
+  // the setState while the value holds.
+  const [aiming, setAiming] = useState(false);
+
+  useEffect(() => {
+    const onAim = (e: Event) =>
+      setAiming((e as CustomEvent<AimTelemetry>).detail.aiming);
+    window.addEventListener(AIM_EVENT, onAim);
+    return () => window.removeEventListener(AIM_EVENT, onAim);
+  }, []);
 
   // Sprint denial has no store flag: only sprinting drains stamina, so a fall
   // through the floor — or holding sprint while already there — is the denial.
@@ -1016,17 +1094,21 @@ function VitalsBlock() {
         color="bg-warn"
       />
       <div className="flex flex-wrap justify-between gap-x-2 font-mono text-[11px]">
-        {/* State carries a glyph and a border, not colour alone: ARMED vs
-            SAFE must read for colour-blind operatives, and TRACKED must
-            survive reduced-motion, which strips the pulse. */}
+        {/* State carries a glyph and a border, not colour alone: AIMED vs
+            ARMED vs SAFE must read for colour-blind operatives, and TRACKED
+            must survive reduced-motion, which strips the pulse. AIMED wins
+            while the rifle is up — aim needs no combat stance by design, and
+            "○ SAFE" under a raised rifle read as a bug. */}
         <span
           className={`rounded-sm border px-1 ${
-            combatEnabled
-              ? "border-danger text-danger"
-              : "border-border text-muted"
+            aiming
+              ? "border-accent text-accent"
+              : combatEnabled
+                ? "border-danger text-danger"
+                : "border-border text-muted"
           }`}
         >
-          {combatEnabled ? "◈ ARMED" : "○ SAFE"}
+          {aiming ? "◉ AIMED" : combatEnabled ? "◈ ARMED" : "○ SAFE"}
         </span>
         {trackedByFang && (
           <span className="animate-pulse rounded-sm border border-warn px-1 text-warn">
@@ -1190,6 +1272,31 @@ const CompassTape = memo(function CompassTape({
     ticks.push({ deg: norm, rel: d - compass, label: CARDINALS[norm] });
   }
 
+  // Label de-overlap, tracked first then nearest: a pip whose text would
+  // crowd one already granted, or sit inside the band around a cardinal
+  // letter, keeps its glyph and loses its text. Clustered bearings and
+  // edge-clamped pips otherwise print distances over each other and over the
+  // cardinals. Linear scans — the tape never holds more than six pips.
+  const pipX = (rel: number) =>
+    50 + (clamp(rel, -TAPE_HALF_DEG, TAPE_HALF_DEG) / TAPE_SPAN_DEG) * 100;
+  const cardinalXs = ticks
+    .filter((t) => t.label)
+    .map((t) => 50 + (t.rel / TAPE_SPAN_DEG) * 100);
+  const labelled = new Set<string>();
+  const grantedXs: number[] = [];
+  const byPriority = [...pips].sort(
+    (a, b) =>
+      Number(b.tracked ?? false) - Number(a.tracked ?? false) ||
+      a.dist - b.dist,
+  );
+  for (const p of byPriority) {
+    const x = pipX(p.rel);
+    if (cardinalXs.some((c) => Math.abs(c - x) < CARDINAL_BAND_PCT)) continue;
+    if (grantedXs.some((g) => Math.abs(g - x) < PIP_TEXT_MIN_SEP_PCT)) continue;
+    grantedXs.push(x);
+    labelled.add(p.id);
+  }
+
   const tracked = pips.find((p) => p.tracked);
   const heading = `Heading ${bearingLabel}, ${Math.round(normalizeDeg(compass))} degrees`;
   const label = tracked
@@ -1226,17 +1333,22 @@ const CompassTape = memo(function CompassTape({
         )}
         {pips.map((p) => {
           const off = Math.abs(p.rel) > TAPE_HALF_DEG;
-          const rel = clamp(p.rel, -TAPE_HALF_DEG, TAPE_HALF_DEG);
           return (
             <div
               key={p.id}
               className={`absolute bottom-0 flex -translate-x-1/2 flex-col items-center gap-0.5 ${p.tone} ${
                 p.tracked ? "border-b border-accent pb-px" : ""
               }`}
-              style={{ left: `${50 + (rel / TAPE_SPAN_DEG) * 100}%` }}
+              style={{ left: `${pipX(p.rel)}%` }}
             >
               <MarkerGlyph shape={p.shape} />
-              <span className="flex items-center gap-0.5 whitespace-nowrap font-mono text-[11px] leading-none">
+              {/* Suppressed text stays in the layout so every glyph sits at
+                  the same height whether or not its label survived. */}
+              <span
+                className={`flex items-center gap-0.5 whitespace-nowrap font-mono text-[11px] leading-none ${
+                  labelled.has(p.id) ? "" : "invisible"
+                }`}
+              >
                 {off && <span>{p.rel < 0 ? "‹" : "›"}</span>}
                 {p.tracked && (
                   <span className="hidden max-w-[7rem] truncate uppercase sm:inline">

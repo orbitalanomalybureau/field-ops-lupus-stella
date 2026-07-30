@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { clearEdges, matchesAction } from "@/game/input";
 import { useGameStore } from "@/game/store";
 import type { GamePhase } from "@/game/types";
 import { onHostMessage, postToParent } from "@/lib/embed";
@@ -151,19 +152,30 @@ function FieldOpsAppInner({ embed = false, skipBoot = false }: Props) {
     postToParent({ type: "fieldops:phase", phase });
   }, [phase]);
 
+  // A queued one-shot press never crosses a phase boundary: an E buffered
+  // while a dialogue or the pause menu was open would otherwise replay on the
+  // first playing frame and reopen what the player just closed.
+  useEffect(
+    () =>
+      useGameStore.subscribe((s, prev) => {
+        if (s.phase !== prev.phase) clearEdges();
+      }),
+    [],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = useGameStore.getState();
       if (s.phase === "playing" || s.phase === "ruins") {
-        if (e.code === "KeyJ") {
+        if (matchesAction(e.code, "journal")) {
           e.preventDefault();
           openJournal();
         }
-        if (e.code === "KeyP") {
+        if (matchesAction(e.code, "photo")) {
           e.preventDefault();
           togglePhoto();
         }
-        if (e.code === "KeyK") {
+        if (matchesAction(e.code, "settings")) {
           e.preventDefault();
           useGameStore.setState({
             prevPhase: s.phase,
@@ -172,7 +184,12 @@ function FieldOpsAppInner({ embed = false, skipBoot = false }: Props) {
           if (document.pointerLockElement) document.exitPointerLock();
         }
       }
-      if (s.phase === "photo" && (e.code === "KeyP" || e.code === "Escape")) {
+      // Escape stays literal here: it is the universal close key, not a
+      // rebindable action, and must exit photo mode whatever pause is bound to.
+      if (
+        s.phase === "photo" &&
+        (matchesAction(e.code, "photo") || e.code === "Escape")
+      ) {
         togglePhoto();
       }
     };

@@ -116,7 +116,13 @@ function QuestMarker({ x, z, label, active }: { x: number; z: number; label: str
           opacity={0.9}
         />
       </mesh>
-      <Html distanceFactor={28} center style={{ pointerEvents: "none" }}>
+      <Html
+        distanceFactor={28}
+        center
+        // Below the overlay layer (z-20) — world labels never beat panels.
+        zIndexRange={[12, 0]}
+        style={{ pointerEvents: "none" }}
+      >
         <div className="whitespace-nowrap rounded-sm border border-accent/40 bg-void/80 px-2 py-0.5 font-mono text-[10px] text-accent">
           {label}
         </div>

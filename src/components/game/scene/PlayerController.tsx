@@ -15,6 +15,7 @@ import {
 } from "@/game/input";
 import { attackPoseActive, consumeKick } from "@/game/feedback";
 import { noiseLevel } from "@/game/noise";
+import { closeTopPanel } from "@/game/uiPanels";
 import {
   SLIDE_SLOPE,
   sampleHeight,
@@ -228,8 +229,10 @@ export function PlayerController() {
     // A modal that closes on Escape flips the phase inside the same keypress,
     // so a pause edge only belongs to us if the previous frame was pauseable
     // too — otherwise closing a dialogue would immediately pause the game.
+    // An open HUD panel outranks the pause menu: the press is spent closing
+    // the topmost one and only pauses when nothing was open to close.
     if (consumeEdge("pause") && pauseable && wasPauseable.current) {
-      useGameStore.getState().togglePause();
+      if (!closeTopPanel()) useGameStore.getState().togglePause();
     }
     wasPauseable.current = pauseable;
 

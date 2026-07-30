@@ -103,7 +103,7 @@ export const INITIAL_OBJECTIVES: Objective[] = [
   {
     id: "scan",
     title: "Run field scanner",
-    detail: "Hold Q to scan flora, fauna, and structures (3 targets).",
+    detail: "Hold {scan} to scan flora, fauna, and structures (3 targets).",
     done: false,
   },
   {

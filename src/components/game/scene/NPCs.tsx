@@ -362,7 +362,10 @@ function NpcFigure({
                   : "border-accent/50 bg-void/85 text-accent"
               }`}
             >
-              {talked ? npc.name : `${npc.name} · E`}
+              {npc.name}
+              {/* The key hint repeats the HUD prompt's "Press E"; the name,
+                  readable from outside prompt range, does not. */}
+              {!talked && <span aria-hidden> · E</span>}
             </div>
             {ui.bark && (
               <div

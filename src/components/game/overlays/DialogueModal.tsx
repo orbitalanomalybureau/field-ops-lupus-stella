@@ -9,6 +9,92 @@ function digitOf(code: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+const CHIP_ID = "fieldops-comms-chip";
+
+/**
+ * Anti-flash threshold. A machine that gets the modal on screen inside this
+ * window never sees the chip at all, so nothing blinks on hardware that was
+ * never slow; long enough to clear a healthy commit, short enough that a stall
+ * still reads as an answer to the keypress rather than a freeze.
+ */
+const CHIP_DELAY_MS = 200;
+
+/** Set by the modal itself, not by the phase: the chip stands in for a panel. */
+let dialogueOnScreen = false;
+
+function hideCommsChip(): void {
+  if (typeof document === "undefined") return;
+  document.getElementById(CHIP_ID)?.remove();
+}
+
+/**
+ * Written straight to the DOM rather than rendered, because React is exactly
+ * what it is covering for: the phase flip re-renders the whole world tree, and
+ * a chip inside that tree would land in the same commit as the modal it is
+ * supposed to precede. Body-level and z-39 — above the HUD, under the dialog's
+ * own backdrop, so the real panel simply covers it when it arrives.
+ */
+function showCommsChip(): void {
+  if (typeof document === "undefined" || document.getElementById(CHIP_ID)) {
+    return;
+  }
+  const chip = document.createElement("div");
+  chip.id = CHIP_ID;
+  chip.setAttribute("role", "status");
+  chip.textContent = "COMMS…";
+  // Never focusable and never clickable: the modal takes focus on mount and
+  // this must not be in its way.
+  chip.style.cssText = [
+    "position:fixed",
+    "left:50%",
+    "bottom:14%",
+    "transform:translateX(-50%)",
+    "z-index:39",
+    "pointer-events:none",
+    "padding:0.5rem 1rem",
+    "border:1px solid var(--color-border)",
+    "border-radius:var(--radius)",
+    "background:rgb(10 12 18 / 0.9)",
+    "color:var(--color-accent)",
+    "font-family:var(--font-mono)",
+    "font-size:11px",
+    "letter-spacing:0.25em",
+  ].join(";");
+  document.body.appendChild(chip);
+}
+
+/**
+ * Mounted for the whole run, so it is already listening when the phase flips.
+ * Store listeners fire synchronously inside set(), which is what puts the chip
+ * ahead of the render it is hiding.
+ */
+export function CommsPlaceholder() {
+  useEffect(() => {
+    let timer = 0;
+    const stop = () => {
+      window.clearTimeout(timer);
+      timer = 0;
+      hideCommsChip();
+    };
+    const unsubscribe = useGameStore.subscribe((s, prev) => {
+      if (s.phase === prev.phase) return;
+      if (s.phase !== "dialogue") {
+        stop();
+        return;
+      }
+      timer = window.setTimeout(() => {
+        if (!dialogueOnScreen) showCommsChip();
+      }, CHIP_DELAY_MS);
+    });
+    return () => {
+      unsubscribe();
+      stop();
+    };
+  }, []);
+
+  return null;
+}
+
 export function DialogueModal() {
   const npcId = useGameStore((s) => s.dialogueNpcId);
   const nodeId = useGameStore((s) => s.dialogueNode);
@@ -22,6 +108,17 @@ export function DialogueModal() {
   useGameStore((s) => s.inventory);
 
   const open = Boolean(npcId && nodeId);
+
+  // Clears the stand-in the moment the panel itself is committed — the chip
+  // covers the wait for THIS render, not merely for the phase flip.
+  useEffect(() => {
+    if (!open) return;
+    dialogueOnScreen = true;
+    hideCommsChip();
+    return () => {
+      dialogueOnScreen = false;
+    };
+  }, [open]);
 
   // Number keys pick from the VISIBLE list, matching the rendered ordinals —
   // not from node.choices, where hidden entries would shift every hotkey.

@@ -1,10 +1,15 @@
 import { useGameStore } from "@/game/store";
 import { sampleHeight } from "@/game/worldHeight";
 import { Html } from "@react-three/drei";
+import { ProximityLabel } from "./WorldPOIs";
 
 /** World-space Html stays under the overlay layer (ClickToPlay/HUD/dialogs
  *  start at z-20) — drei's default zIndexRange outdraws every modal. */
 const LABEL_Z_RANGE: [number, number] = [12, 0];
+
+/** Apron label for a 7 m hatch prompt (entities.ts): it belongs to the walk up
+ *  to the dome, not to the whole colony bowl the dome is visible from. */
+const HATCH_LABEL_RADIUS = 14;
 
 /** Interior ops floor when player enters the central dome. */
 export function CommandDomeInterior() {
@@ -120,7 +125,12 @@ export function CommandDomeInterior() {
         zIndexRange={LABEL_Z_RANGE}
         style={{ pointerEvents: "none" }}
       >
-        <div className="whitespace-nowrap rounded-sm border border-accent/40 bg-void/90 px-2 py-1 font-mono text-[10px] text-accent">
+        {/* Decorative echo of the HUD exit prompt, which the ops floor is
+            always inside the pick radius of. */}
+        <div
+          aria-hidden
+          className="whitespace-nowrap rounded-sm border border-accent/40 bg-void/90 px-2 py-1 font-mono text-[10px] text-accent"
+        >
           OPS FLOOR · E to exit
         </div>
       </Html>
@@ -134,14 +144,15 @@ export function DomeHatchMarker() {
   if (inside) return null;
   const y = sampleHeight(0, 6);
   return (
-    <Html
+    <ProximityLabel
+      anchor={[0, 9]}
+      radius={HATCH_LABEL_RADIUS}
       distanceFactor={22}
       position={[0, y + 3.2, 9]}
-      center
-      zIndexRange={LABEL_Z_RANGE}
-      style={{ pointerEvents: "none" }}
     >
+      {/* Decorative echo of the HUD hatch prompt. */}
       <div
+        aria-hidden
         className={`whitespace-nowrap rounded-sm border bg-void/80 px-2 py-0.5 font-mono text-[10px] ${
           entered
             ? "border-border text-dim"
@@ -150,6 +161,6 @@ export function DomeHatchMarker() {
       >
         COMMAND DOME · E
       </div>
-    </Html>
+    </ProximityLabel>
   );
 }

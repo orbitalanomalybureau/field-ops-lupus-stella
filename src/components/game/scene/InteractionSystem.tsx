@@ -2,7 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import { useRef } from "react";
 import { CACHE_LOGS, NPCS, SCAN_TARGETS, SITE_LOGS, WORLD } from "@/game/data";
 import { ENTITIES, entitiesOfKind, type WorldEntity } from "@/game/entities";
-import { consumeEdge } from "@/game/input";
+import { consumeEdge, isHeld, lastDevice } from "@/game/input";
 import { passesCeiling } from "@/game/selectors";
 import { useGameStore } from "@/game/store";
 import { getAudio } from "@/game/audio";
@@ -33,6 +33,13 @@ const SITES = ["carver-marker", "verne-plate", "hale-camp"] as const;
 const REST_DAWN = 0.3;
 const REST_DUSK = 0.785;
 
+/**
+ * How long the interact key must be held before the watch rotates. The rest
+ * label flips in place under one key ("until dusk"/"until dawn"), so a press
+ * edge let a double-tap cost a full rotation; a hold cannot be tapped twice.
+ */
+const REST_HOLD_SEC = 1.2;
+
 function dist2(ax: number, az: number, bx: number, bz: number) {
   return Math.hypot(ax - bx, az - bz);
 }
@@ -43,6 +50,8 @@ type Cand = {
   dist: number;
   radius: number;
   action: () => void;
+  /** Hold-to-confirm instead of a press edge. Stable across a flipping label. */
+  holdId?: string;
 };
 
 export function InteractionSystem() {
@@ -55,6 +64,12 @@ export function InteractionSystem() {
   // Last prompt written to the store, so an unchanged prompt does not push a
   // fresh object every frame and re-render the HUD off movement alone.
   const lastPrompt = useRef<string | null>(null);
+  // Hold-to-confirm accumulator, keyed by holdId rather than label: resting
+  // flips the label in place the instant the clock jumps, and the spent latch
+  // has to outlive that or a still-held key would rotate the watch twice.
+  const holdId = useRef<string | null>(null);
+  const holdTimer = useRef(0);
+  const holdSpent = useRef(false);
 
   useFrame((_, delta) => {
     const store = useGameStore.getState();
@@ -65,6 +80,10 @@ export function InteractionSystem() {
     const ceil = store.spoilerCeiling;
     const char = store.getCharacter();
     const scanMul = char?.scanBonus ?? 1;
+    // A hold needs a HELD interact, which only the keyboard path reports:
+    // touch sends one tap edge and the pad re-adds its edge every poll. On
+    // those devices the action stays a press, so the bunk is still reachable.
+    const canHold = lastDevice() === "keyboard";
 
     // Spawn sits inside the gate's 12 m completion ring, so the trigger only
     // arms once the operative has actually walked away — a fresh deploy must
@@ -100,7 +119,7 @@ export function InteractionSystem() {
     const considerEntity = (
       e: WorldEntity | undefined,
       action: () => void,
-      opts?: { label?: string; sub?: string },
+      opts?: { label?: string; sub?: string; holdId?: string },
     ) => {
       if (!e?.interact || !passesCeiling(e, ceil)) return;
       consider({
@@ -109,6 +128,7 @@ export function InteractionSystem() {
         dist: dist2(x, z, e.x, e.z),
         radius: e.interact.radius,
         action,
+        holdId: opts?.holdId,
       });
     };
 
@@ -133,7 +153,8 @@ export function InteractionSystem() {
       // never refuses here: the prompt only exists on the ops floor, and the
       // dome IS the storm shelter — the outside-in-a-storm refusal has no
       // reachable state. The jump is instantaneous this wave; a fade hook
-      // exists in FieldOpsApp if a later pass wants to dress it.
+      // exists in FieldOpsApp if a later pass wants to dress it. Half a day
+      // is too much to spend on a press edge, so this one action is a hold.
       const tod = store.timeOfDay;
       const toDusk = tod >= 0.3 && tod <= 0.7;
       considerEntity(
@@ -158,7 +179,8 @@ export function InteractionSystem() {
         },
         {
           label: toDusk ? "Rest until dusk" : "Rest until dawn",
-          sub: "Watch rotation",
+          sub: canHold ? "Hold E — watch rotation" : "Watch rotation",
+          holdId: "rest",
         },
       );
     } else {
@@ -246,20 +268,58 @@ export function InteractionSystem() {
 
     if (best) {
       const b: Cand = best;
+      const inRange = b.dist < b.radius;
+      const holding = Boolean(b.holdId) && canHold && inRange;
+
+      let hold: number | undefined;
+      if (holding) {
+        if (holdId.current !== b.holdId) {
+          holdId.current = b.holdId ?? null;
+          holdTimer.current = 0;
+          holdSpent.current = false;
+        }
+        if (!isHeld("interact")) {
+          // Released: the ring drains and the latch re-arms. One hold, one
+          // rotation — a key left down must not roll the clock twice.
+          holdTimer.current = 0;
+          holdSpent.current = false;
+        } else if (!holdSpent.current) {
+          // Real time, not the physics clamp: `d` would stretch 1.2 s into
+          // ten on a headless frame, while a single stall frame must still
+          // not fill the ring by itself.
+          holdTimer.current = Math.min(
+            REST_HOLD_SEC,
+            holdTimer.current + Math.min(delta, 0.25),
+          );
+          if (holdTimer.current >= REST_HOLD_SEC) {
+            holdSpent.current = true;
+            b.action();
+          }
+        }
+        hold = holdTimer.current / REST_HOLD_SEC;
+      } else {
+        holdId.current = null;
+      }
+
       // Distance rounded to the metre: the readout shows integers, so sub-metre
       // drift must not count as a change and re-render the prompt every frame.
-      const key = `${b.label}|${b.sub ?? ""}|${Math.round(b.dist)}`;
+      // The ring is quantized the same way, to tenths.
+      const ring = hold === undefined ? "" : Math.round(hold * 10);
+      const key = `${b.label}|${b.sub ?? ""}|${Math.round(b.dist)}|${ring}`;
       if (key !== lastPrompt.current) {
         lastPrompt.current = key;
-        store.setInteract({ label: b.label, sub: b.sub, dist: b.dist });
+        store.setInteract({ label: b.label, sub: b.sub, dist: b.dist, hold });
       }
-      pendingAction.current = b.dist < b.radius ? b.action : null;
+      // A hold action deliberately leaves nothing pending: the press edge is
+      // still consumed below, it just does not fire the rotation.
+      pendingAction.current = inRange && !holding ? b.action : null;
     } else {
       if (lastPrompt.current !== null) {
         lastPrompt.current = null;
         store.setInteract(null);
       }
       pendingAction.current = null;
+      holdId.current = null;
     }
 
     // The interact edge is consumed here and nowhere else — whichever caller

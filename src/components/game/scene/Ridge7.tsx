@@ -1,12 +1,12 @@
 import { useFrame } from "@react-three/fiber";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Html } from "@react-three/drei";
 import { WORLD } from "@/game/data";
 import { ENTITIES } from "@/game/entities";
 import { QUALITY } from "@/game/quality";
 import { useGameStore } from "@/game/store";
 import { sampleBiome, sampleHeight } from "@/game/worldHeight";
+import { ProximityLabel } from "./WorldPOIs";
 
 /** Park–Miller LCG. Golden screenshots depend on this exact stream. */
 function seeded(seed: number) {
@@ -148,6 +148,10 @@ function HaleCamp() {
   );
 }
 
+/** The beacon prompt fires at 7 m (entities.ts); the label covers that plus
+ *  the last of the climb. Long-range wayfinding is the objective pip's job. */
+const BEACON_LABEL_RADIUS = 14;
+
 /** Survey-B route markers. Positions are load-bearing — do not move. */
 const POSTS: [number, number][] = Array.from({ length: 12 }, (_, i) => {
   const t = i / 11;
@@ -257,15 +261,18 @@ export function Ridge7() {
             emissiveIntensity={1.8}
           />
         </mesh>
-        <Html
+        {/* Anchored on the overlook, not on this group: the beacon spins once
+            planted, and the label rides its axis. */}
+        <ProximityLabel
+          anchor={[bx, bz]}
+          radius={BEACON_LABEL_RADIUS}
           distanceFactor={30}
           position={[0, 6.5, 0]}
-          center
-          // Below the overlay layer (z-20) — world labels never beat panels.
-          zIndexRange={[12, 0]}
-          style={{ pointerEvents: "none" }}
         >
+          {/* Decorative echo of the HUD interact prompt and the objective log,
+              both of which already announce this site. */}
           <div
+            aria-hidden
             className={`whitespace-nowrap rounded-sm border bg-void/85 px-2 py-0.5 font-mono text-[10px] ${
               planted
                 ? "border-accent/40 text-accent"
@@ -274,7 +281,7 @@ export function Ridge7() {
           >
             {planted ? "RIDGE-7 ONLINE" : "PLANT BEACON · E"}
           </div>
-        </Html>
+        </ProximityLabel>
       </group>
 
       <mesh position={[-160, 18, 80]}>

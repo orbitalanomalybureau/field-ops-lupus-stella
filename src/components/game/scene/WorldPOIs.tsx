@@ -1,5 +1,5 @@
 import { useFrame } from "@react-three/fiber";
-import { useRef } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { useGameStore } from "@/game/store";
@@ -32,6 +32,74 @@ const OBJECTIVE_PIPS: ObjectivePip[] = [
 
 /** A hint pip and an objective pip can name the same site; the objective wins. */
 const PIP_MERGE_RADIUS = 14;
+
+/** Same throttle and hysteresis as the NPC nameplates, so every world label
+ *  mounts and drops on one rhythm. */
+const LABEL_PERIOD = 0.25;
+const LABEL_HYSTERESIS = 1.5;
+/** A pip names a destination still being walked toward, so its text carries
+ *  further than an interact echo — but not the 250 m the map is wide. */
+const PIP_LABEL_RADIUS = 40;
+/** World-space Html stays under the overlay layer (ClickToPlay/HUD/dialogs
+ *  start at z-20) — drei's default zIndexRange outdraws every modal. */
+const LABEL_Z_RANGE: [number, number] = [12, 0];
+
+/**
+ * The scene's one world-label mount: the Html exists only inside `radius` of
+ * `anchor`, because a mounted label costs DOM, layout and screen-reader text
+ * whether or not it is legible from where the player stands.
+ *
+ * `anchor` is the ground point the range is measured from; a label parented to
+ * an offset or rotating group does not sit above it. The range check rides the
+ * frame loop and flips one boolean — subscribing to playerPos instead would
+ * re-render the scene graph on every step.
+ *
+ * NPC and ghost plates keep their own gates: their anchors walk.
+ */
+export function ProximityLabel({
+  anchor,
+  radius,
+  distanceFactor,
+  // Local to the parent group, so the default sits the label on its origin.
+  position = [0, 0, 0],
+  children,
+}: {
+  anchor: readonly [number, number];
+  radius: number;
+  distanceFactor: number;
+  position?: [number, number, number];
+  children: ReactNode;
+}) {
+  const acc = useRef(LABEL_PERIOD);
+  const shown = useRef(false);
+  const [near, setNear] = useState(false);
+
+  useFrame((_, delta) => {
+    acc.current += Math.min(delta, 0.05);
+    if (acc.current < LABEL_PERIOD) return;
+    acc.current = 0;
+    const p = useGameStore.getState().playerPos;
+    const d = Math.hypot(p.x - anchor[0], p.z - anchor[1]);
+    const next = d < (shown.current ? radius + LABEL_HYSTERESIS : radius);
+    if (next !== shown.current) {
+      shown.current = next;
+      setNear(next);
+    }
+  });
+
+  if (!near) return null;
+  return (
+    <Html
+      distanceFactor={distanceFactor}
+      position={position}
+      center
+      zIndexRange={LABEL_Z_RANGE}
+      style={{ pointerEvents: "none" }}
+    >
+      {children}
+    </Html>
+  );
+}
 
 function pipActive(s: GameState, id: ObjectiveId) {
   const o = s.objectives.find((x) => x.id === id);
@@ -116,17 +184,13 @@ function QuestMarker({ x, z, label, active }: { x: number; z: number; label: str
           opacity={0.9}
         />
       </mesh>
-      <Html
-        distanceFactor={28}
-        center
-        // Below the overlay layer (z-20) — world labels never beat panels.
-        zIndexRange={[12, 0]}
-        style={{ pointerEvents: "none" }}
-      >
+      {/* The pip mesh keeps carrying navigation from across the valley; only
+          its text waits for the approach. */}
+      <ProximityLabel anchor={[x, z]} radius={PIP_LABEL_RADIUS} distanceFactor={28}>
         <div className="whitespace-nowrap rounded-sm border border-accent/40 bg-void/80 px-2 py-0.5 font-mono text-[10px] text-accent">
           {label}
         </div>
-      </Html>
+      </ProximityLabel>
     </group>
   );
 }

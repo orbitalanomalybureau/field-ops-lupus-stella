@@ -15,7 +15,7 @@ import { RuinModal } from "./overlays/RuinModal";
 import { ClickToPlay } from "./overlays/ClickToPlay";
 import { PauseMenu } from "./overlays/PauseMenu";
 import { PhotoMode } from "./overlays/PhotoMode";
-import { DialogueModal } from "./overlays/DialogueModal";
+import { CommsPlaceholder, DialogueModal } from "./overlays/DialogueModal";
 import { JournalPanel } from "./overlays/JournalPanel";
 import { SettingsPanel } from "./overlays/SettingsPanel";
 import { KeybindOverlay, Tutorial } from "./overlays/Tutorial";
@@ -265,6 +265,9 @@ function FieldOpsAppInner({ embed = false, skipBoot = false }: Props) {
       {inWorld && <KeybindOverlay />}
       {phase === "photo" && <PhotoMode />}
       {phase === "paused" && <PauseMenu />}
+      {/* Mounted across the whole world phase set so the flip into 'dialogue'
+          never remounts it — it has to be subscribed before the flip lands. */}
+      {inWorld && <CommsPlaceholder />}
       {phase === "dialogue" && <DialogueModal />}
       {phase === "journal" && <JournalPanel />}
       {phase === "settings" && <SettingsPanel />}

@@ -948,6 +948,10 @@ export const DIALOGUES: Record<string, DialogueTree> = {
           { label: "Storm protocol?", next: "storm" },
           { label: "How's the Verne hull?", next: "verne" },
           { label: "That hull plate by your bench —", if: "met-berger", next: "plate" },
+          // Ungated on purpose: the shard trade below is invisible to an
+          // operative who has never picked one up, so nothing in the game
+          // said Berger buys them. This is the sign over the counter.
+          { label: "Anything you're short of?", next: "shards" },
           {
             label: "One prism shard for a servo tune.",
             if: "item:prism-shard>=1",
@@ -1012,6 +1016,20 @@ export const DIALOGUES: Record<string, DialogueTree> = {
         speaker: "Berger",
         text: "Frame seven, forward. Cut it off her myself before ballast-down. A ship that size, you keep one piece where the sun still finds it. Don't call it sentiment — call it a maintenance schedule for remembering.",
         choices: [{ label: "Maintenance. Sure.", next: "end", effect: "codex:verne" }],
+      },
+      shards: {
+        speaker: "Berger",
+        text: "Prism lattice, since you're asking. The hoof herd sheds laminae out past the treeline — scan the herd properly and you walk back with a shard. One shard, one servo tune: your suit quits arguing with you a klick later than it does now. Nothing in stores grinds that fine, so I don't haggle.",
+        choices: [
+          { label: "I'll bring you one.", next: "end" },
+          {
+            label: "One prism shard for a servo tune.",
+            if: "item:prism-shard>=1",
+            once: "trade-berger-servo",
+            next: "trade-servo",
+            effect: "take:prism-shard:1|upgrade:stamina:0.1",
+          },
+        ],
       },
       "trade-servo": {
         speaker: "Berger",
@@ -1345,7 +1363,15 @@ export const MISSION_BOARD: MissionBoardItem[] = [
 ];
 
 export const SPAWNS: Record<SpawnPoint, { x: number; z: number; yaw: number }> = {
-  "south-gate": { x: 0, z: 40, yaw: Math.PI },
+  // Also the fresh-deploy frame, so it is composed rather than merely legal.
+  // (0, 40) facing south put the gate mast's 8.4 m pole two metres in front
+  // of the chase camera with the whole colony behind the operative's back —
+  // the first thing a new player ever saw was a black post. West of the mast
+  // and a metre inside the line, the west gate post and its lit lintel hold
+  // the right of the frame and the dome cluster fills the rest. Yaw is not
+  // exactly 0 on purpose: PlayerController seeds `initYaw || Math.PI`, so a
+  // zero yaw is discarded and the operative faces south again (see `colony`).
+  "south-gate": { x: -6, z: 41, yaw: -0.2 },
   // On the pad south of the storage building, facing the dome. The obvious
   // (2, 20) sat INSIDE the 9 m storage box at (4, 22) — a deep-linked player
   // spawned into an unlit interior and saw a wall of black.

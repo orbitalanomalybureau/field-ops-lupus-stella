@@ -1,10 +1,14 @@
 import { useFrame } from "@react-three/fiber";
 import { useRef } from "react";
 import * as THREE from "three";
-import { Html } from "@react-three/drei";
 import { WORLD } from "@/game/data";
 import { useGameStore } from "@/game/store";
 import { sampleHeight } from "@/game/worldHeight";
+import { ProximityLabel } from "./WorldPOIs";
+
+/** The log prompt fires at 7 m (entities.ts); the label covers that plus the
+ *  walk down the shore. The objective pip carries the coast from range. */
+const MEMORIAL_LABEL_RADIUS = 14;
 
 /** South coast overlook + Kaguyahime memorial (Book II teaser). */
 export function KaguyahimeCoast() {
@@ -101,15 +105,16 @@ export function KaguyahimeCoast() {
         distance={16}
       />
 
-      <Html
+      <ProximityLabel
+        anchor={[mx, mz]}
+        radius={MEMORIAL_LABEL_RADIUS}
         distanceFactor={32}
         position={[mx, y + 3.4, mz]}
-        center
-        // Below the overlay layer (z-20) — world labels never beat panels.
-        zIndexRange={[12, 0]}
-        style={{ pointerEvents: "none" }}
       >
+        {/* Decorative echo of the HUD interact prompt, which already announces
+            the memorial. */}
         <div
+          aria-hidden
           className={`whitespace-nowrap rounded-sm border bg-void/85 px-2 py-0.5 font-mono text-[10px] ${
             logged
               ? "border-accent/40 text-accent"
@@ -118,7 +123,7 @@ export function KaguyahimeCoast() {
         >
           {logged ? "KAGUYAHIME VECTOR" : "MEMORIAL · E LOG"}
         </div>
-      </Html>
+      </ProximityLabel>
 
       {/* Coast cache */}
       <CoastCache />

@@ -11,9 +11,14 @@
  * One-shots are gated on a running context: before the user's first gesture
  * they no-op instead of queueing into a suspended graph and firing as a chord
  * on resume.
+ *
+ * The adaptive music layer lives in ./music. It rides this master bus (so the
+ * volume slider, the hurt duck and mute all reach it) and subscribes to the
+ * store itself — nothing outside this file has to start or feed it.
  */
 
 import { ENTITIES } from "@/game/entities";
+import { createMusicLayer, installMusicDriver } from "./music";
 
 /** Anchors for the placed loops. Fallbacks only guard a data refactor. */
 const RUIN_SITE = ENTITIES.find((e) => e.id === "ruin") ?? { x: 18, z: 155 };
@@ -65,6 +70,12 @@ type AudioApi = {
   setStalkerPos: (pos: { x: number; z: number } | null) => void;
   /** Ridge-7 beacon ping loop at the overlook. Inactive by default. */
   setBeaconActive: (on: boolean) => void;
+  /** Build (if needed) and fade the music layer in. The store driver calls this. */
+  startMusic: () => void;
+  /** Fade the music out; the voices are released a few seconds later. */
+  stopMusic: () => void;
+  /** 0..1 threat for the music strata. Ramped over seconds, never jumped. */
+  setMusicIntensity: (v: number) => void;
   dispose: () => void;
 };
 
@@ -99,6 +110,9 @@ export function getAudio(): AudioApi {
       updateListener: () => {},
       setStalkerPos: () => {},
       setBeaconActive: () => {},
+      startMusic: () => {},
+      stopMusic: () => {},
+      setMusicIntensity: () => {},
       dispose: () => {},
     };
     return api;
@@ -213,6 +227,11 @@ export function getAudio(): AudioApi {
   tFilter.connect(tGain);
   tGain.connect(master);
   tension.start();
+
+  // Music: on the master bus, under everything else. No voices exist until the
+  // store driver (installed at the end of this factory) sees a live session.
+  const music = createMusicLayer(ctx, master);
+  let musicUnsub: (() => void) | null = null;
 
   /* ------------------------------ voice helpers ------------------------------ */
 
@@ -477,6 +496,7 @@ export function getAudio(): AudioApi {
       // Constants long enough that crossing the hatch swells, never clicks.
       interiorFilter.frequency.setTargetAtTime(v ? 320 : 18000, ctx.currentTime, 0.25);
       weatherBus.gain.setTargetAtTime(v ? 0.35 : 1, ctx.currentTime, 0.25);
+      music.setInterior(v); // music sits on master, so it ducks separately
     },
     thunder: (distance01 = 0.5) => {
       thunderCore(Math.max(0, Math.min(1, distance01)), weatherBus);
@@ -683,11 +703,17 @@ export function getAudio(): AudioApi {
         tone("sine", 2350, 0.015, 0.18, { at: t0, out: p ?? weatherBus });
       }, 2600);
     },
+    startMusic: () => music.start(),
+    stopMusic: () => music.stop(),
+    setMusicIntensity: (v) => music.setIntensity(v),
     dispose: () => {
       if (beaconTimer !== null) {
         window.clearInterval(beaconTimer);
         beaconTimer = null;
       }
+      musicUnsub?.();
+      musicUnsub = null;
+      music.dispose();
       try {
         ctx.close();
       } catch {
@@ -696,6 +722,9 @@ export function getAudio(): AudioApi {
       api = null;
     },
   };
+  // The music reads the store directly — phase decides whether it plays, threat
+  // decides how thick — so no caller anywhere has to think about it.
+  musicUnsub = installMusicDriver(music);
   return api;
 }
 

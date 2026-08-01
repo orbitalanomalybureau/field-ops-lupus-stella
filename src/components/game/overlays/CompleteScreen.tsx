@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ArmedButton } from "@/components/ui/ArmedButton";
 import { useGameStore } from "@/game/store";
 import { fetchProtocolStats, postEnding } from "@/lib/telemetry";
 
@@ -24,7 +25,6 @@ export function CompleteScreen() {
   const done = useGameStore(
     (s) => s.visibleObjectives().filter((o) => o.done).length,
   );
-  const [armed, setArmed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [tally, setTally] = useState<{
     broadcast: number;
@@ -36,12 +36,6 @@ export function CompleteScreen() {
   // clipboard path instead.
   const canShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
-
-  useEffect(() => {
-    if (!armed) return;
-    const t = window.setTimeout(() => setArmed(false), 5000);
-    return () => window.clearTimeout(t);
-  }, [armed]);
 
   useEffect(() => {
     if (!copied) return;
@@ -201,7 +195,9 @@ export function CompleteScreen() {
           </a>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+        {/* Wraps so the armed caption — a full-width sibling of the button it
+            describes — drops to its own line under the row. */}
+        <div className="mt-6 flex flex-col flex-wrap gap-3 sm:flex-row sm:justify-center">
           <button
             type="button"
             onClick={() => setPhase("playing")}
@@ -209,23 +205,17 @@ export function CompleteScreen() {
           >
             Return to surface
           </button>
-          <button
-            type="button"
-            onClick={() => (armed ? reset() : setArmed(true))}
-            className={`min-h-11 rounded-md px-5 py-2.5 font-semibold ${
-              armed
-                ? "border border-danger bg-danger/15 font-mono text-[11px] tracking-wide text-danger"
-                : "bg-primary text-sm text-void hover:bg-primary-glow"
-            }`}
-          >
-            {armed ? "CONFIRM — ERASES FIELD LOG" : "New operative"}
-          </button>
+          <ArmedButton
+            idleLabel="New operative"
+            armedLabel="CONFIRM — ERASES FIELD LOG"
+            consequence="PROGRESS IS NOT RECOVERABLE"
+            onConfirm={reset}
+            className="min-h-11 rounded-md px-5 py-2.5 font-semibold"
+            idleClassName="bg-primary text-sm text-void hover:bg-primary-glow"
+            armedClassName="border border-danger bg-danger/15 font-mono text-[11px] tracking-wide text-danger"
+            hintClassName="w-full font-mono text-[10px] text-dim"
+          />
         </div>
-        {armed && (
-          <p className="mt-3 font-mono text-[10px] text-dim">
-            ARMED · STANDS DOWN IN 5S · PROGRESS IS NOT RECOVERABLE
-          </p>
-        )}
       </div>
     </div>
   );

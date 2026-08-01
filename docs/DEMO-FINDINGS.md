@@ -66,43 +66,61 @@ map waypoints and fast travel; mobile portrait/landscape layouts; /embed and
 /terminal postMessage bridge; reduced-motion; presence persistence; save
 resume/reset.
 
-## Areas for improvement (noted, deliberately not done in this wave)
+## Improvement backlog — implemented
 
-Curated from the playtesters' suggestions plus the standing review backlog —
-roughly in value order:
+Everything below was filed as an improvement by the playtesters and has since
+been built. Verified by `tests/demo-improve.spec.ts` plus screenshots.
 
-1. **Adaptive music layer** — modal pads that thicken with threat state; the
-   procedural audio engine already has the hooks (see Tone.js note in
-   [OSS-TOOLBOX](OSS-TOOLBOX.md)).
-2. **"NEW OBJECTIVE" highlight** when a hidden tasking reveals — the total
-   silently grows (10→11) today; a pulse on the new row would make it legible.
-3. **Rest confirmation** — the bunk accepts instant back-to-back rests; a 1–2 s
-   hold-to-confirm would prevent accidental double time-skips.
-4. **Harvest regrowth cue** — fern beds silently respawn after half a day;
-   nothing in-game says so. A scanner line ("bed re-luminous") would teach it.
-5. **Berger's hidden trade** — a broke player never learns Berger buys prism
-   shards; an ungated flavor line naming the price would fix discoverability.
-6. **First-frame framing** — fresh spawn faces a light tower 2 m ahead; nudge
-   spawn yaw for a better opening shot.
-7. **Scree-slide telegraphing** — the slide works but gives no feedback; a
-   "footing lost" line or stamina tick would name the mechanic.
-8. **Dialogue open placeholder** on slow devices — the store enters dialogue
-   phase before the modal commits; an instant "COMMS…" chip would cover the gap.
-9. **Melee swing count** — marine kills a fang in 2 swings vs. the ~3 the
-   design brief describes; confirm intended per-operative counts.
-10. **Chapter-quiet scope** — the NET-quiet window starts at page load (not
-    deploy) and doesn't cover AVA lines; revisit if reader-funnel telemetry
-    shows notes still getting buried.
-11. **QA observability** — a read-only `__stateTest` snapshot (inventory,
-    flags, codex stage, recent messages) would make future playtests far less
-    brittle than parsing HUD text.
-12. **Keybind capture hint** — settings can't bind mouse buttons; a one-line
-    "keyboard only — mouse 1 always strikes" would pre-empt confusion.
-13. **Shared ArmedButton** — RuinModal's countersign and CompleteScreen's
-    new-operative confirm duplicate the same 5 s arm/auto-disarm pattern.
-14. **Known residual**: at 812×375 with a worst-case vitals panel (4 specimen
-    types + TRACKED), the objectives panel's top sliver can still overlap —
-    fully separating them needs a layout change, not a clamp.
+| # | Improvement | What shipped |
+|---|---|---|
+| 1 | Adaptive music layer | `src/game/music.ts`: three cross-fading strata in D Phrygian (survey → alert → hunted) driven by a store subscription (tracked/aggro/health/weather/interior/reduced-motion). Zero samples, ~1.6 KB gz, 10 oscillators while playing, released on stop. |
+| 2 | "NEW OBJECTIVE" highlight | NEW chip on unseen taskings + unread dot on the Obj button, using the codex UPDATED pattern (device-local marker, cleared when the log is read). |
+| 3 | Rest confirmation | The bunk is now a ~1.2 s hold: `InteractPrompt.hold` (0..1) drives a filling key glyph and the sub-line reads "HOLD E · watch rotation". A tap does nothing; one hold rotates once. |
+| 4 | Harvest regrowth cue | One scanner line per regrowth event ("SCANNER — fern bed re-luminous. Sample window open."), collapsed to a single generic line when several sites lapse together. |
+| 5 | Berger's hidden trade | Ungated "Anything you're short of?" branch names the shard, its source and the price; the priced choice reuses the existing once-flag, so the economy is unchanged. |
+| 6 | First-frame framing | South-gate spawn moved (0,40)→(−6,41) yaw −0.2: the opening frame shows the gate post, Berger and the dome cluster instead of a light-tower pole. |
+| 7 | Scree-slide telegraphing | One "FOOTING — scree giving way. Ride it out." + alert blip on a slide that actually takes (0.35 s arm, 8 s quiet window). |
+| 8 | Dialogue open placeholder | A "COMMS…" chip written imperatively to the DOM on the phase flip, behind a 200 ms anti-flash threshold, covered by the real panel when it paints. |
+| 10 | Chapter-quiet scope | The grace window now arms at deploy (not URL parse) and mutes NET/AVA/RECON ambient traffic only — objective, tasking, scan and player-action lines always post. |
+| 11 | QA observability | Read-only `window.__stateTest` (inventory, flags, codex stage, objective counts, recent messages, phase, clock, weather, tracked, health) + a `gameState(page)` test helper. |
+| 12 | Keybind capture hint | "Keyboard only — mouse buttons cannot be bound. Mouse 1 always strikes, right mouse always aims." under the capturing row. |
+| 13 | Shared ArmedButton | `src/components/ui/ArmedButton.tsx` now backs all three arm/confirm controls (ruin countersign, new operative, pause-menu abort) with one 5 s stand-down constant the caption quotes. |
+| 14 | 812×375 residual | Fixed by restructuring, not clamping: under ~420 px viewport height the vitals block goes inline and the objectives panel takes a matching reserve. Desktop unchanged. |
+| — | World-label distance gating | Every world-space `<Html>` mounts only inside a radius (14 m for interact echoes, 40 m for pips) via one shared `ProximityLabel`; label DOM that duplicates the HUD prompt is `aria-hidden`. |
+| — | Canvas hint retires | "Click canvas to look" now clears on keyboard/gamepad input or after 15 s, instead of sitting over the world forever in embeds. |
+
+### Cross-file bugs found while integrating (also fixed)
+
+- **Fast travel never moved the operative.** The mission board wrote the store,
+  but the controller owns its transform and overwrote `playerPos` on the next
+  frame — the player snapped back on resume. There is now a real placement
+  contract (`src/game/placement.ts`); fast travel and the post-flatline evac
+  both go through it instead of reaching for the `__controlsTest` QA global.
+- **Resting restored no stamina.** `setStamina(100)` was overwritten by the
+  controller's local authority every frame; it now adopts external raises.
+- **A spawn yaw of exactly 0 was discarded** (`initYaw || Math.PI`), so the
+  colony spawn had always faced south instead of the dome.
+
+## Still open
+
+- **Melee swing count — needs your call.** Fang HP 100, `ATTACK_DAMAGE` 40 ×
+  `combatBonus`: Theo 1.1 → 3 swings, Marine 1.35 → **2**, Survey 0.85 → 3.
+  The design brief says ~3. Making the marine 3 means dropping their
+  `combatBonus` below 1.25 in `data.ts` — a balance change, so it is yours.
+- **Hold-to-confirm is keyboard-only.** Touch sends a single tap edge and the
+  pad re-adds its edge each poll, so the bunk stays a press there; expressing a
+  hold on those devices needs `input.ts` to report held state per device.
+- **Ambient lines suppressed during the chapter grace are lost for that run**
+  (AvaComms latches `fired` before pushing) — pre-existing, now also true of
+  AVA lines.
+- **Golden screenshots will need re-baselining** on Linux: the spawn framing
+  and label gating change what wide shots contain.
+- 18 NEEDS-CHECK canon entries in `canon/CANON.md`; `DATABASE_URL` on Vercel
+  for presence.
+
+Deliberate NOT-DOs (design guardrails, unchanged): no floating world-space
+game UI, no combat-required endings, no physics engine, no minimap radar that
+trivializes the compass/tracking fiction.
 
 Deliberate NOT-DOs (design guardrails, unchanged): no floating world-space
 game UI, no combat-required endings, no physics engine, no minimap radar that

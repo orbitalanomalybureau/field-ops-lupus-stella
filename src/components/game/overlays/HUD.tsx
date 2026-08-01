@@ -106,6 +106,35 @@ function writeCodexMarker(marker: Record<string, number>): void {
 }
 
 /**
+ * Taskings the operative has actually had in front of them, by id. Same
+ * device-local marker as the codex, for the same reason: a hidden tasking
+ * revealing mid-run grows the list silently — the ticker line that announces
+ * it scrolls away, and the count going 10/11 names nothing.
+ */
+const OBJECTIVES_SEEN_KEY = "fieldops-objectives-seen-v1";
+
+function readObjectivesMarker(): string[] {
+  try {
+    const raw = window.localStorage.getItem(OBJECTIVES_SEEN_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    // Private mode or a mangled blob: every open tasking chips NEW once.
+    return [];
+  }
+}
+
+function writeObjectivesMarker(ids: string[]): void {
+  try {
+    window.localStorage.setItem(OBJECTIVES_SEEN_KEY, JSON.stringify(ids));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+/**
  * Resolve what a codex entry currently says. Stage n (1-based) reads
  * stages[n-1]; entries without stages, or not yet advanced past the base
  * unlock, fall back to the flat body.
@@ -385,9 +414,10 @@ export function HUD() {
   const inventory = useGameStore((s) => s.inventory);
   const codexStage = useGameStore((s) => s.codexStage);
   const [panel, setPanel] = useState<"none" | "obj" | "codex" | "map">("obj");
-  // Hydrated from localStorage after mount; {} until then, so SSR markup never
-  // depends on device state.
+  // Hydrated from localStorage after mount; empty until then, so SSR markup
+  // never depends on device state.
   const [codexSeen, setCodexSeen] = useState<Record<string, number>>({});
+  const [objectivesSeen, setObjectivesSeen] = useState<string[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [waypoint, setWaypoint] = useState<Vec2 | null>(null);
 
@@ -453,6 +483,7 @@ export function HUD() {
 
   useEffect(() => {
     setCodexSeen(readCodexMarker());
+    setObjectivesSeen(readObjectivesMarker());
   }, []);
 
   // Opening the codex marks everything currently readable as read — on disk
@@ -467,6 +498,16 @@ export function HUD() {
     writeCodexMarker(snapshot);
     return () => setCodexSeen(snapshot);
   }, [panel, codexRaw, codexStage]);
+
+  // Same discipline for the tasking list: everything currently listed counts
+  // as seen the moment the panel is up, but only on disk, so the NEW chip
+  // survives the read it was raised for and is gone on the next open.
+  useEffect(() => {
+    if (panel !== "obj") return;
+    const snapshot = objectives.map((o) => o.id);
+    writeObjectivesMarker(snapshot);
+    return () => setObjectivesSeen(snapshot);
+  }, [panel, objectives]);
 
   // Phones get one auto-expiring line instead of the stacked feed; without it
   // pushMessage output is invisible on the primary form factor.
@@ -485,6 +526,11 @@ export function HUD() {
   const codexIsNew = (c: CodexEntry) =>
     c.unlocked && (codexStage[c.id] ?? 0) > (codexSeen[c.id] ?? -1);
   const codexHasNews = panel !== "codex" && codex.some(codexIsNew);
+  // A tasking already struck through is history, not news, however it got
+  // there. Linear scans — the list never passes a dozen rows.
+  const objectiveIsNew = (o: Objective) =>
+    !o.done && !objectivesSeen.includes(o.id);
+  const objectivesHaveNews = panel !== "obj" && objectives.some(objectiveIsNew);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
@@ -522,6 +568,7 @@ export function HUD() {
             onClick={() => setPanel(panel === "obj" ? "none" : "obj")}
             label="Obj"
             icon={<Crosshair className="h-4 w-4" />}
+            dot={objectivesHaveNews}
           />
           <HudBtn
             active={panel === "codex"}
@@ -568,8 +615,11 @@ export function HUD() {
       <InteractPrompt />
 
       {/* right-20 on mobile leaves a gutter for the SPR/SCN/TAP action column
-          (bottom-right, ~48px + margin) so the vitals bars are not occluded. */}
-      <div className="pointer-events-none absolute bottom-24 left-3 right-20 sm:bottom-5 sm:left-4 sm:right-auto sm:w-72">
+          (bottom-right, ~48px + margin) so the vitals bars are not occluded.
+          A short landscape spends the width it has instead of the height it
+          does not: the panel widens to whatever clears the message feed on
+          the right, sits a little lower, and the bars go sideways inside it. */}
+      <div className="pointer-events-none absolute bottom-24 left-3 right-20 sm:bottom-5 sm:left-4 sm:right-auto sm:w-72 sm:[@media(max-height:420px)]:bottom-3 sm:[@media(max-height:420px)]:w-[min(24rem,100vw-23rem)]">
         {toast && (
           <p
             role="status"
@@ -579,7 +629,7 @@ export function HUD() {
             {toast}
           </p>
         )}
-        <div className="panel-glass space-y-2 rounded-md p-3">
+        <div className="panel-glass space-y-2 rounded-md p-3 [@media(max-height:420px)]:space-y-1 [@media(max-height:420px)]:p-2">
           <VitalsBlock />
           {/* Wraps rather than truncates: at 375px four carried types become
               two terse lines, never a clipped count. */}
@@ -629,13 +679,16 @@ export function HUD() {
           ~560px of viewport height a flat 48vh buried health and the ZPE bar
           during combat. The reserve is the vitals panel at its tallest plus
           its bottom offset; the floor keeps the header and scrollbar findable
-          on the shortest supported landscape. */}
+          on the shortest supported landscape. Under 420px of height the
+          vitals panel is its inline self (~7rem, bars laid out sideways), so
+          the reserve shrinks to match and the two blocks stop sharing pixels
+          at 812x375 without either one leaving its anchor. */}
       {panel === "obj" && (
-        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[max(2.75rem,min(42vh,100vh-28rem))] sm:max-h-[max(2.75rem,min(48vh,100vh-24.5rem))] sm:top-[11rem] w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
-          <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
+        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[max(2.75rem,min(42vh,100vh-28rem))] sm:max-h-[max(2.75rem,min(48vh,100vh-24.5rem))] [@media(max-height:420px)]:max-h-[max(2.75rem,100vh-20rem)] sm:top-[11rem] w-[min(100%-1.5rem,19rem)] overflow-y-auto panel-glass rounded-md p-3 [@media(max-height:420px)]:p-2 sm:left-4">
+          <p className="mb-2 font-mono text-[11px] tracking-widest text-accent [@media(max-height:420px)]:mb-1">
             OBJECTIVES {doneCount}/{objectives.length}
           </p>
-          <ul className="space-y-2.5">
+          <ul className="space-y-2.5 [@media(max-height:420px)]:space-y-1">
             {objectives.map((o) => (
               <li key={o.id} className="text-xs leading-snug">
                 <span
@@ -650,8 +703,16 @@ export function HUD() {
                   {o.optional ? " · opt" : ""}
                   {o.book2 ? " · B2" : ""}
                 </span>
+                {objectiveIsNew(o) && (
+                  <span className="ml-1.5 align-middle rounded-sm border border-accent/40 px-1 py-px font-mono text-[9px] tracking-widest text-accent">
+                    NEW
+                  </span>
+                )}
+                {/* On a short landscape the row is the title alone: one line
+                    per tasking is the difference between reading the list and
+                    scrolling a 55px window one row at a time. */}
                 {!o.done && (
-                  <p className="mt-0.5 pl-4 text-muted">
+                  <p className="mt-0.5 pl-4 text-muted [@media(max-height:420px)]:hidden">
                     {detailText(o.detail)}
                   </p>
                 )}
@@ -662,7 +723,7 @@ export function HUD() {
       )}
 
       {panel === "codex" && (
-        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[max(2.75rem,min(46vh,100vh-28rem))] sm:max-h-[max(2.75rem,min(55vh,100vh-24.5rem))] sm:top-[11rem] w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 sm:left-4">
+        <div className="pointer-events-auto absolute left-3 top-[10rem] max-h-[max(2.75rem,min(46vh,100vh-28rem))] sm:max-h-[max(2.75rem,min(55vh,100vh-24.5rem))] [@media(max-height:420px)]:max-h-[max(2.75rem,100vh-20rem)] sm:top-[11rem] w-[min(100%-1.5rem,21rem)] overflow-y-auto panel-glass rounded-md p-3 [@media(max-height:420px)]:p-2 sm:left-4">
           <p className="mb-2 font-mono text-[11px] tracking-widest text-accent">
             FIELD CODEX
           </p>
@@ -1157,15 +1218,17 @@ function InteractPrompt() {
   }, []);
 
   if (!interact || interact.dist >= 8) return null;
+  // A hold action has to say so in the line that reads like an instruction:
+  // the glyph filling on its own is decoration until the words name the hold.
+  const hold = interact.hold;
+  const sub = hold === undefined ? interact.sub : holdSub(device, interact.sub);
   return (
     <div className="pointer-events-none absolute bottom-[38%] left-1/2 -translate-x-1/2">
       <div className="panel-glass flex items-center gap-3 rounded-md px-4 py-2.5">
-        <InteractGlyph device={device} />
+        <InteractGlyph device={device} hold={hold} />
         <div>
           <p className="text-sm font-medium text-fg">{interact.label}</p>
-          {interact.sub && (
-            <p className="font-mono text-[11px] text-muted">{interact.sub}</p>
-          )}
+          {sub && <p className="font-mono text-[11px] text-muted">{sub}</p>}
         </div>
       </div>
     </div>
@@ -1539,17 +1602,52 @@ function HeadingArrow({ compass }: { compass: number }) {
   );
 }
 
-function InteractGlyph({ device }: { device: Device }) {
-  const base =
-    "flex h-8 items-center justify-center border border-accent/50 font-mono text-[11px] tracking-wide text-accent";
-  if (device === "touch")
-    return <span className={`${base} w-12 rounded-full`}>TAP</span>;
+/** The one place the live interact binding becomes text, per device. */
+function interactKeyText(device: Device): string {
+  if (device === "touch") return "TAP";
   // input.ts maps the standard-mapping X button to interact.
-  if (device === "gamepad")
-    return <span className={`${base} w-8 rounded-full`}>X</span>;
+  if (device === "gamepad") return "X";
+  return keyLabel(getKeymap().interact[0] ?? "KeyE");
+}
+
+/** A thumb holds a button, not a key: "HOLD TAP" reads as an instruction lost. */
+function holdHint(device: Device): string {
+  return device === "touch"
+    ? "PRESS AND HOLD"
+    : `HOLD ${interactKeyText(device)}`;
+}
+
+/**
+ * Sub-line for a hold prompt. Authored copy may open with a hold clause of its
+ * own ("Hold E — watch rotation"); that clause is stripped rather than stacked,
+ * because only this one resolves the LIVE binding and the device — a rebind or
+ * a pad makes the authored key a lie, and no prompt says "hold" twice.
+ */
+function holdSub(device: Device, sub?: string): string {
+  const rest = sub?.replace(/^hold\s+\S+\s*[—–·:-]?\s*/i, "").trim();
+  return rest ? `${holdHint(device)} · ${rest}` : holdHint(device);
+}
+
+function InteractGlyph({ device, hold }: { device: Device; hold?: number }) {
+  const base =
+    "relative flex h-8 items-center justify-center overflow-hidden border border-accent/50 font-mono text-[11px] tracking-wide text-accent";
   return (
-    <span className={`${base} w-8 rounded-sm`}>
-      {keyLabel(getKeymap().interact[0] ?? "KeyE")}
+    <span
+      className={`${base} ${device === "touch" ? "w-12" : "w-8"} ${
+        device === "keyboard" ? "rounded-sm" : "rounded-full"
+      }`}
+    >
+      {/* Fills bottom-up, the same grammar the reticle uses for a recharging
+          cell — a filling box already means "keep waiting" in this HUD. No
+          transition: the value arrives per frame and any easing lags it. */}
+      {hold !== undefined && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-0 bottom-0 bg-accent/35"
+          style={{ height: `${Math.round(clamp(hold, 0, 1) * 100)}%` }}
+        />
+      )}
+      <span className="relative">{interactKeyText(device)}</span>
     </span>
   );
 }
@@ -1571,18 +1669,24 @@ const Bar = memo(function Bar({
   pulse?: boolean;
   note?: string;
 }) {
+  // Short landscape lays the bar out sideways — label, track, percent on one
+  // line. `contents` dissolves the label row so its two spans become items of
+  // the same flex line as the track; the track is the only thing that grows,
+  // so a 375px-tall viewport still gets a full-width health gauge.
   return (
-    <div>
+    <div className="[@media(max-height:420px)]:flex [@media(max-height:420px)]:items-center [@media(max-height:420px)]:gap-2">
       <div
-        className={`mb-0.5 flex items-center justify-between font-mono text-[11px] ${labelClass}`}
+        className={`mb-0.5 flex items-center justify-between font-mono text-[11px] [@media(max-height:420px)]:contents ${labelClass}`}
       >
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1 [@media(max-height:420px)]:min-w-24 [@media(max-height:420px)]:shrink-0">
           {icon} {label}
           {note ? ` · ${note}` : ""}
         </span>
-        <span className="tabular-nums">{Math.round(value)}%</span>
+        <span className="tabular-nums [@media(max-height:420px)]:order-last">
+          {Math.round(value)}%
+        </span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-surface">
+      <div className="h-1.5 overflow-hidden rounded-full bg-surface [@media(max-height:420px)]:flex-1">
         <div
           className={`h-full ${color} transition-all duration-200 ${pulse ? "animate-pulse" : ""}`}
           style={{ width: `${Math.max(0, Math.min(100, value))}%` }}

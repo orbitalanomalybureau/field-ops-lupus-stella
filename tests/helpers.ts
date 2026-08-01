@@ -10,9 +10,34 @@ export type ControlsProbe = {
   setAim: (on: boolean) => void;
 };
 
+/**
+ * Game state as the store holds it, not as the HUD prints it. Every field is
+ * a fresh copy made at call time — mutating one cannot reach the store.
+ */
+export type GameSnapshot = {
+  inventory: Record<string, number>;
+  flags: Record<string, boolean>;
+  codexStage: Record<string, number>;
+  /** `done` counts every completed tasking; `visibleTotal` is what the log shows. */
+  objectives: { done: number; total: number; visibleTotal: number };
+  /** Newest ticker line first, capped at the store's ten. */
+  recentMessages: string[];
+  phase: string;
+  timeOfDay: number;
+  weather: string;
+  trackedByFang: boolean;
+  health: number;
+};
+
+/** The read-only state surface PlayerController installs alongside the above. */
+export type StateProbe = {
+  get: () => GameSnapshot;
+};
+
 declare global {
   interface Window {
     __controlsTest?: ControlsProbe;
+    __stateTest?: StateProbe;
   }
 }
 
@@ -123,4 +148,17 @@ export async function probe<T>(
 /** Everything the HUD currently says, for text assertions. */
 export async function hudText(page: Page): Promise<string> {
   return page.locator("body").innerText();
+}
+
+/**
+ * What the game actually believes, for assertions that would otherwise scrape
+ * the HUD. Prefer this over `hudText` for state: a copy edit must not fail a
+ * behavioural spec.
+ */
+export async function gameState(page: Page): Promise<GameSnapshot> {
+  return page.evaluate(() => {
+    const p = window.__stateTest;
+    if (!p) throw new Error("__stateTest probe missing");
+    return p.get();
+  });
 }

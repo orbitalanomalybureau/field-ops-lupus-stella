@@ -515,7 +515,7 @@ test.describe("deep-link matrix + reduced motion", () => {
     await page.waitForFunction(() => Boolean(window.__controlsTest), null, { timeout: 60_000 });
     await settle(page, 2500);
     const body = await hudText(page);
-    console.log("chapter=7 coords (south-gate 0,40):", body.match(/-?\d+,-?\d+/)?.[0]);
+    console.log("chapter=7 coords (south-gate -6,41):", body.match(/-?\d+,-?\d+/)?.[0]);
     console.log("chapter=7 clock (tod .7 => ~19:36 DUSK):", body.match(/\d\d:\d\d · [A-Z]+/)?.[0]);
     console.log("chapter=7 wx (want HAZE):", body.match(/WX [A-Z]+/)?.[0]);
     console.log("chapter=7 note:", body.match(/CH\. 7[^\n]*/)?.[0] ?? "NO TICKER NOTE");

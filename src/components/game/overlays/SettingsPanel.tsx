@@ -10,6 +10,7 @@ import {
   setLookSensitivity,
 } from "@/game/input";
 import type { Action, Keymap } from "@/game/input";
+import { placeOperative } from "@/game/placement";
 import { describeTier } from "@/game/quality";
 import type { QualityTier } from "@/game/quality";
 import { useGameStore } from "@/game/store";
@@ -48,6 +49,9 @@ const ACTION_LABELS: Record<Action, string> = {
   objectives: "Objectives",
   pause: "Pause",
 };
+
+/** Only one row captures at a time, so its hint can hold a fixed id. */
+const CAPTURE_HINT_ID = "keybind-capture-hint";
 
 function prettyCode(code: string): string {
   if (code.startsWith("Key")) return code.slice(3);
@@ -363,6 +367,9 @@ export function SettingsPanel() {
               <button
                 type="button"
                 onClick={() => setListening(action)}
+                aria-describedby={
+                  listening === action ? CAPTURE_HINT_ID : undefined
+                }
                 className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left ${
                   listening === action
                     ? "border-accent bg-accent/10"
@@ -376,6 +383,17 @@ export function SettingsPanel() {
                     : bindings[action].map(prettyCode).join(" / ") || "UNBOUND"}
                 </span>
               </button>
+              {/* Under the captured row rather than above the list: the row is
+                  where the player is looking, and the list scrolls. */}
+              {listening === action && (
+                <p
+                  id={CAPTURE_HINT_ID}
+                  className="mt-1 px-3 font-mono text-[10px] leading-relaxed text-muted"
+                >
+                  Keyboard only — mouse buttons cannot be bound. Mouse 1 always
+                  strikes, right mouse always aims.
+                </p>
+              )}
             </li>
           ))}
         </ul>
@@ -401,6 +419,11 @@ export function SettingsPanel() {
                   if (live) {
                     setPlayerPos(coords.x, 0, coords.z);
                     setPlayerYaw(coords.yaw);
+                    // The store write alone never moved the rig — the
+                    // controller owns its transform and overwrites playerPos
+                    // on the next frame, so the operative snapped back to
+                    // where they were standing the moment play resumed.
+                    placeOperative(coords.x, coords.z, coords.yaw);
                     setSpawn(null);
                     // The ruin chamber is its own scene; surfacing the operative
                     // on fast travel keeps Resume in the open world.

@@ -103,6 +103,12 @@ export type InteractPrompt = {
   label: string;
   sub?: string;
   dist: number;
+  /**
+   * Hold-to-confirm progress, 0..1, for actions that must not fire on a
+   * stray tap — the bunk rest skips half a day under a prompt whose label
+   * flips in place. Undefined means the action fires on the press edge.
+   */
+  hold?: number;
 } | null;
 
 /**

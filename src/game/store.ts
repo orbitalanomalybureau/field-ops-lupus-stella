@@ -14,6 +14,7 @@ import { passesCeiling, visibleObjectivesOf } from "./selectors";
 import { getAudio } from "./audio";
 import { hitStop } from "./feedback";
 import { bindingTokenText } from "./input";
+import { placeOperative } from "./placement";
 import { detectTier, isQualityTier, lowerTier } from "./quality";
 import type { QualityTier } from "./quality";
 import type {
@@ -60,10 +61,30 @@ const HOURS_PER_DAY = 28;
  */
 const EVAC_FADE_MS = 3000;
 
+/**
+ * Chapter-arrival grace, measured from the deploy — not from the URL, which a
+ * reader may open minutes before they press DEPLOY. The quiet window holds
+ * ambient chatter off the ticker; the longer clock hold keeps the staged hour
+ * from eroding while they find the camera.
+ */
+const CHAPTER_QUIET_MS = 15000;
+const CHAPTER_CLOCK_HOLD_MS = 45000;
+
+/**
+ * Ticker prefixes the arrival grace mutes: the colony-net/Ava comms layer and
+ * the creature mesh's own contact reports — traffic the world emits at nobody
+ * in particular. Everything the operative did, was tasked with, completed or
+ * scanned still posts, and so does weather: a muted storm warning is a lie.
+ */
+const AMBIENT_PREFIXES = ["NET —", "AVA —", "RECON —"];
+
 /** The three staff the "npcs" objective names out loud. */
 const REQUIRED_NPCS = ["thornhill", "castillo", "voss"];
 
 const CACHE_MARKERS = MARKERS.filter((m) => m.kind === "cache");
+
+/** Where an operative stands with nothing staged — the fresh-deploy frame. */
+const FRESH_SPAWN = SPAWNS["south-gate"];
 
 /** Dialogue hints that drop a real navigation pip, keyed to data.ts markers. */
 const HINT_MARKERS: Record<string, string> = {
@@ -136,11 +157,19 @@ const UPGRADE_LABELS: Record<UpgradeKey, string> = {
  * SCAN_TARGETS id. InteractionSystem calls harvestScan alongside markScanned.
  * Ferns carry charged spores only while the lattice pulse is up, so the fern
  * harvest and the boosted-predator window are the same hours on purpose.
+ * `regrown` is what the scanner calls the site when its stock comes back.
  */
-const HARVEST_RULES: Record<string, { item: ItemId; nightOnly?: boolean }> = {
-  "scan-fern": { item: "fern-spore", nightOnly: true },
-  "scan-herd": { item: "prism-shard" },
-  "scan-collar": { item: "collar-component" },
+const HARVEST_RULES: Record<
+  string,
+  { item: ItemId; nightOnly?: boolean; regrown: string }
+> = {
+  "scan-fern": {
+    item: "fern-spore",
+    nightOnly: true,
+    regrown: "fern bed re-luminous",
+  },
+  "scan-herd": { item: "prism-shard", regrown: "prismhoof herd back on the flats" },
+  "scan-collar": { item: "collar-component", regrown: "west collar shedding again" },
 };
 
 /**
@@ -148,7 +177,8 @@ const HARVEST_RULES: Record<string, { item: ItemId; nightOnly?: boolean }> = {
  * real seconds at WORLD.dayLengthSec 480). Respawn is lazy and lives in
  * setTimeOfDay — the only place world time advances — where a lapsed site
  * simply drops out of scannedIds and the scanner picker finds it again.
- * Deliberately silent: regrowth is ambient, not a ticker event.
+ * One scanner line marks the moment, because a loop nothing ever mentions is
+ * a loop nobody plays; the regrowth itself is unchanged.
  */
 const HARVEST_RESPAWN_DAYS = 0.5;
 
@@ -296,18 +326,18 @@ type GameStore = {
    */
   evacUntil: number;
   /**
-   * performance.now() deadline while ambient NET chatter stays off the
-   * ticker. Set by a ?chapter deep link so the reader's arrival note is not
-   * flooded off the 10-line feed before they find the camera.
-   * Presentation-transient: never written to the SaveBlob. 0 means no quiet
-   * window in flight.
+   * performance.now() deadline while ambient chatter (AMBIENT_PREFIXES) stays
+   * off the ticker. Armed by startMission on a ?chapter deploy so the
+   * reader's arrival note is not flooded off the 10-line feed before they
+   * find the camera. Presentation-transient: never written to the SaveBlob.
+   * 0 means no quiet window in flight.
    */
   netQuietUntilMs: number;
   /**
-   * performance.now() deadline while DayNight holds the world clock. Set by
-   * a ?chapter deep link so a staged dusk cannot roll into night in the
-   * reader's first seconds on the surface. Presentation-transient: never
-   * written to the SaveBlob. 0 means no hold in flight.
+   * performance.now() deadline while DayNight holds the world clock. Armed by
+   * startMission on a ?chapter deploy so a staged dusk cannot roll into night
+   * in the reader's first seconds on the surface. Presentation-transient:
+   * never written to the SaveBlob. 0 means no hold in flight.
    */
   clockHoldUntilMs: number;
   playerPos: { x: number; y: number; z: number };
@@ -753,8 +783,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   evacUntil: 0,
   netQuietUntilMs: 0,
   clockHoldUntilMs: 0,
-  playerPos: { x: 0, y: 0, z: 40 },
-  playerYaw: Math.PI,
+  playerPos: { x: FRESH_SPAWN.x, y: 0, z: FRESH_SPAWN.z },
+  playerYaw: FRESH_SPAWN.yaw,
   playerSpeed: 0,
   animState: "idle",
   trackedByFang: false,
@@ -882,21 +912,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   startMission: () => {
-    const spawn = get().consumeSpawn();
+    // No staged spawn is the fresh deploy: the south gate, off the same table
+    // every other entry point reads, so the opening frame can never drift
+    // from the deep-linked one.
+    const spawn = get().consumeSpawn() ?? FRESH_SPAWN;
     const note = get().pendingDeployNote;
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
     set({
       phase: "playing",
       pendingDeployNote: null,
+      // The arrival grace starts here, not at URL parse: a reader who lingers
+      // on the briefing would otherwise spend the whole window on that screen
+      // and reach the surface with the ticker already open for business.
+      netQuietUntilMs: note ? now + CHAPTER_QUIET_MS : 0,
+      clockHoldUntilMs: note ? now + CHAPTER_CLOCK_HOLD_MS : 0,
       messages: [
         "FIELD OPS ONLINE — SURVEY MESH LOADED",
         "J journal · P photo · Esc menu · deep recon active",
       ],
       health: 100,
       stamina: 100,
-      playerPos: spawn
-        ? { x: spawn.x, y: 0, z: spawn.z }
-        : { x: 0, y: 0, z: 40 },
-      playerYaw: spawn?.yaw ?? Math.PI,
+      playerPos: { x: spawn.x, y: 0, z: spawn.z },
+      playerYaw: spawn.yaw,
     });
     // A staged storm's WX alert fired at deep-link time, before the reset
     // above wiped the ticker — re-post it. Deploy is the only path that
@@ -1004,13 +1041,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   pushMessage: (msg) => {
-    // Chapter-arrival grace: ambient NET chatter would flood the reader's
-    // arrival note off the 10-line ticker. Only NET lines drop — objective,
-    // scan, and player-action lines still show.
+    // Chapter-arrival grace: ambient chatter would flood the reader's arrival
+    // note off the 10-line ticker. Only AMBIENT_PREFIXES drop — objective,
+    // scan, weather and player-action lines still show.
     if (
-      msg.startsWith("NET —") &&
       typeof performance !== "undefined" &&
-      performance.now() < get().netQuietUntilMs
+      performance.now() < get().netQuietUntilMs &&
+      AMBIENT_PREFIXES.some((p) => msg.startsWith(p))
     ) {
       return;
     }
@@ -1053,19 +1090,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         : "NET — collar auto-evac complete. Vitals restored to field minimum. Resume tasking.",
     );
     // The controller owns its own transform and reads store.playerPos only at
-    // mount, so the store write alone cannot move the rig mid-run. It exposes
-    // a placement seam for exactly this; the store write above keeps saves,
-    // creatures and the map coherent whether or not the seam is mounted.
-    if (typeof window !== "undefined") {
-      const seam = (
-        window as unknown as {
-          __controlsTest?: {
-            teleport?: (x: number, z: number, yaw?: number) => void;
-          };
-        }
-      ).__controlsTest;
-      seam?.teleport?.(spawn.x, spawn.z, spawn.yaw);
-    }
+    // mount, so the store write alone cannot move the rig mid-run. The store
+    // write above keeps saves, creatures and the map coherent whether or not
+    // a controller is mounted; this moves the rig when one is.
+    placeOperative(spawn.x, spawn.z, spawn.yaw);
     get().persist();
   },
   setSignal: (signalMeter) =>
@@ -1255,9 +1283,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ timeOfDay, worldDays });
       return;
     }
-    // Regrowth is silent by design — no toast; the site simply drops out of
-    // scannedIds and the scanner picker finds it again. Autosave flushes the
-    // change; persisting here would write localStorage mid-frame.
+    // The site drops out of scannedIds and the scanner picker finds it again.
+    // Autosave flushes the change; persisting here would write localStorage
+    // mid-frame.
     const due = regrown;
     const next = { ...lastHarvest };
     for (const id of due) delete next[id];
@@ -1267,6 +1295,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lastHarvest: next,
       scannedIds: get().scannedIds.filter((id) => !due.includes(id)),
     });
+    // One line, in the field, only while the player is in it: a rest or a
+    // deep-link clock jump can lapse several sites in the same call, and the
+    // cue is a teaching moment, not a per-site toast. Anything that moves the
+    // clock outside play — hydrate, a staged chapter hour — leaves no trace.
+    if (get().phase !== "playing") return;
+    const site = HARVEST_RULES[due[0]]?.regrown;
+    if (!site) return;
+    get().pushMessage(
+      due.length > 1
+        ? "SCANNER — survey sites re-reading. Sample windows open."
+        : `SCANNER — ${site}. Sample window open.`,
+    );
   },
 
   /**
@@ -1569,16 +1609,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (scene.ceiling === "book2early" && get().spoilerCeiling === "book1") {
         set({ spoilerCeiling: "book2early" });
       }
-      // Arrival grace: mute ambient NET chatter so the arrival note holds
-      // the ticker, and have DayNight pin the clock so a staged dusk cannot
-      // roll into night while the reader is still finding the camera.
-      const now = typeof performance !== "undefined" ? performance.now() : 0;
-      set({
-        pendingSpawn: scene.spawn,
-        pendingDeployNote: scene.note,
-        netQuietUntilMs: now + 15000,
-        clockHoldUntilMs: now + 45000,
-      });
+      // The arrival note is staged, not posted, and the grace windows it
+      // carries are armed by startMission — everything here happens at URL
+      // parse time, which may be a long way from the deploy.
+      set({ pendingSpawn: scene.spawn, pendingDeployNote: scene.note });
       get().setTimeOfDay(scene.tod);
       get().setWeather(scene.wx);
     }
@@ -1701,8 +1735,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       evacUntil: 0,
       netQuietUntilMs: 0,
       clockHoldUntilMs: 0,
-      playerPos: { x: 0, y: 0, z: 40 },
-      playerYaw: Math.PI,
+      playerPos: { x: FRESH_SPAWN.x, y: 0, z: FRESH_SPAWN.z },
+      playerYaw: FRESH_SPAWN.yaw,
       playerSpeed: 0,
       animState: "idle",
       trackedByFang: false,

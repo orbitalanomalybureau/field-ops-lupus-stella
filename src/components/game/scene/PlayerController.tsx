@@ -15,6 +15,7 @@ import {
 } from "@/game/input";
 import { attackPoseActive, consumeKick } from "@/game/feedback";
 import { noiseLevel } from "@/game/noise";
+import { registerPlacer } from "@/game/placement";
 import { closeTopPanel } from "@/game/uiPanels";
 import {
   SLIDE_SLOPE,
@@ -48,6 +49,13 @@ const SLIDE_MAX_SPEED = 17;
 const STAND_UP_SEC = 0.5;
 /** Hysteresis, or ground sitting on the threshold stutters in and out. */
 const SLIDE_EXIT = SLIDE_SLOPE - 0.07;
+/**
+ * The scree cue waits for the slide to actually take — a micro-slip across a
+ * threshold-slope patch is not worth a ticker line — and then goes quiet, so a
+ * long bumpy descent reads as one event instead of a stutter of them.
+ */
+const SLIDE_CUE_DELAY = 0.35;
+const SLIDE_CUE_QUIET = 8;
 const CAM_PAD = 0.45;
 const CAM_MIN_DIST = 1.5;
 
@@ -97,13 +105,19 @@ export function PlayerController() {
   const group = useRef<THREE.Group>(null);
   const init = useGameStore.getState().playerPos;
   const initYaw = useGameStore.getState().playerYaw;
-  const yaw = useRef(initYaw || Math.PI);
+  // Nullish, not falsy: a yaw of exactly 0 is due north and a legitimate
+  // spawn heading (the colony row uses it). `||` discarded it and faced the
+  // operative south instead.
+  const yaw = useRef(initYaw ?? Math.PI);
   const pitch = useRef(0.06);
   const vel = useRef(new THREE.Vector3());
   const velY = useRef(0);
   const grounded = useRef(true);
   const sliding = useRef(false);
   const standUp = useRef(0);
+  /** Seconds in the current slide, and seconds left of the cue's quiet window. */
+  const slideRun = useRef(0);
+  const slideQuiet = useRef(0);
   const { camera, gl } = useThree();
   const locked = useRef(false);
   const forward = useRef(new THREE.Vector3(0, 0, 1));
@@ -206,8 +220,52 @@ export function PlayerController() {
       setAim: setTouchAim,
     };
 
+    // Read-only companion probe: playtest specs assert on game state instead
+    // of parsing HUD text, which broke on every copy edit. Everything handed
+    // back is a fresh copy, so nothing a spec does to the result can reach the
+    // store, and the read happens on call — no subscription, nothing in the
+    // render path.
+    (window as unknown as { __stateTest: unknown }).__stateTest = {
+      get: () => {
+        const s = useGameStore.getState();
+        return {
+          inventory: { ...s.inventory },
+          flags: { ...s.flags },
+          codexStage: { ...s.codexStage },
+          objectives: {
+            // A completed hidden tasking reveals itself, so `done` never
+            // outruns `visibleTotal` in a real run.
+            done: s.objectives.filter((o) => o.done).length,
+            total: s.objectives.length,
+            visibleTotal: s.visibleObjectives().length,
+          },
+          recentMessages: [...s.messages],
+          phase: s.phase,
+          timeOfDay: s.timeOfDay,
+          weather: s.weather,
+          trackedByFang: s.trackedByFang,
+          health: s.health,
+        };
+      },
+    };
+
+    // The production placement contract (src/game/placement.ts). The rig owns
+    // its transform once mounted, so fast travel and the post-flatline evac
+    // have to come through here — a store write alone is overwritten by the
+    // next frame's setPlayerPos.
+    const unregisterPlacer = registerPlacer((x, z, newYaw) => {
+      const g = group.current;
+      if (!g) return;
+      g.position.set(x, sampleHeight(x, z), z);
+      vel.current.set(0, 0, 0);
+      velY.current = 0;
+      if (newYaw !== undefined) yaw.current = newYaw;
+    });
+
     return () => {
       detachKeyboard();
+      unregisterPlacer();
+      delete (window as unknown as { __stateTest?: unknown }).__stateTest;
       el.removeEventListener("click", onClick);
       document.removeEventListener("pointerlockchange", onLockChange);
       document.removeEventListener("mousemove", onMouseMove);
@@ -283,6 +341,22 @@ export function PlayerController() {
       if (standUp.current <= 0) sliding.current = false;
     }
 
+    // Losing footing is the one locomotion state the player cannot see coming,
+    // and until it says so nothing on screen distinguishes it from bad driving.
+    slideQuiet.current = Math.max(0, slideQuiet.current - d);
+    if (sliding.current && grounded.current) {
+      slideRun.current += d;
+      if (slideRun.current > SLIDE_CUE_DELAY && slideQuiet.current <= 0) {
+        slideQuiet.current = SLIDE_CUE_QUIET;
+        useGameStore
+          .getState()
+          .pushMessage("FOOTING — scree giving way. Ride it out.");
+        getAudio().pulseAlert();
+      }
+    } else {
+      slideRun.current = 0;
+    }
+
     // Aiming suppresses sprint: the rifle comes down or the legs slow.
     const wantSprint =
       input.sprint &&
@@ -290,6 +364,16 @@ export function PlayerController() {
       staminaLocal.current > 2 &&
       !sliding.current &&
       !aiming;
+
+    // The store can raise stamina from outside the loop — the bunk rest sets
+    // it to 100, the auto-evac to 60. This ref is the drain/regen authority
+    // and used to overwrite those writes on the very next frame, so resting
+    // restored nothing. Adopt any external RAISE before integrating; drops
+    // stay ours, or a low store value would fight the drain we just applied.
+    const storedStamina = useGameStore.getState().stamina;
+    if (storedStamina > staminaLocal.current + 0.5) {
+      staminaLocal.current = storedStamina;
+    }
 
     if (wantSprint) {
       staminaLocal.current = Math.max(0, staminaLocal.current - (18 * d) / stamMul);
